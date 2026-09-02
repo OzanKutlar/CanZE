@@ -4,7 +4,7 @@ android {
     compileSdkVersion 28
     //buildToolsVersion '26.0.2'
     defaultConfig {
-        applicationId "lu.fisch.canze"
+        applicationId "lu.fisch.canze.legacy"
         minSdkVersion 15
         targetSdkVersion 28
         versionName '1.34'
