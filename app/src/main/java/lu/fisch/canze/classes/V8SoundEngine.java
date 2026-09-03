@@ -73,8 +73,26 @@ public class V8SoundEngine {
     private static final float[] GEAR_RATIOS = {3.45f, 2.15f, 1.52f, 1.12f, 0.86f, 0.68f};
     private static final float FINAL_DRIVE = 3.65f;
     private static final float WHEEL_CIRCUMFERENCE_M = 1.95f;
-    private static final float BASE_IDLE_RPM = 1000f;
+    private static final float BASE_IDLE_RPM = 780f;
     private static final float REDLINE_RPM = 6600f;
+
+    // Simulated EV motor capability, used to normalise measured torque into an engine load.
+    // Constant torque up to the base speed, constant power (T proportional to 1/v) above it.
+    private static final float MOTOR_PEAK_TORQUE_NM = 220f;
+    private static final float MOTOR_BASE_SPEED_KMH = 45f;
+
+    // The car is only treated as standing still when it is BOTH slow and not being driven.
+    // Creep torque with the brake released clears this gate, so the engine picks up as the car
+    // starts rolling even though the driver never touched the pedal.
+    private static final float STATIONARY_SPEED_KMH = 2.5f;
+    private static final float STATIONARY_TORQUE_NM = 5f;
+
+    // Free revving in neutral. The ceiling is deliberately well below redline, and the rev is
+    // rate limited rather than smoothed so the crank and flywheel audibly spool up.
+    private static final float NEUTRAL_REV_CEILING_RPM = 4600f;
+    private static final float REV_RISE_RPM_PER_S = 2600f;
+    private static final float REV_FALL_RPM_PER_S = 1900f;
+    private static final double NEUTRAL_REV_CURVE = 1.9;
 
     // Minimum road speeds (km/h) required before upshifting into each gear [1->2 .. 5->6]
     private static final float[] MIN_UPSHIFT_SPEEDS = {0f, 28f, 50f, 70f, 88f, 99f};
@@ -105,17 +123,17 @@ public class V8SoundEngine {
      */
     private static final double SUB_BASS_ORDER = 2.0;
 
-    // Acoustic delay lines. The two banks use different offsets so the crossplane pulses arrive
-    // at the collector in a staggered pattern; a delay common to both banks before a summing
-    // point would be pure latency.
+    // Acoustic delay line modelling propagation from the exhaust ports to the collector.
     //
-    // There is deliberately no second "crossover" tap here. Feeding the same bank into the sum
-    // twice at two different delays builds a fixed feedforward comb (notches at 44100/(2*d) Hz
-    // and its odd multiples) which, because it does not move with RPM, colours the whole engine
-    // with a static metallic resonance.
+    // BOTH BANKS MUST BE READ AT THE SAME OFFSET. It is tempting to stagger them ("the banks
+    // carry different cylinders, so they are different signals") but they are not: both are
+    // sums of the identical PULSE_TABLE waveform differing only in firing phase. Offsetting
+    // them adds that waveform to a delayed copy of itself, which is a feedforward comb with
+    // notches at 44100/(2*offset) Hz and odd multiples. Because those notches do not move with
+    // RPM they stamp a fixed metallic fingerprint over the whole engine. A delay common to both
+    // banks ahead of the summing point is, correctly, inaudible.
     private static final int DELAY_LEN = 256;
-    private static final int BANK1_DELAY = 48; // ~1.09 ms
-    private static final int BANK2_DELAY = 88; // ~2.00 ms
+    private static final int HEADER_DELAY = 64; // ~1.45 ms, identical for both banks
     private final double[] bank1Delay = new double[DELAY_LEN];
     private final double[] bank2Delay = new double[DELAY_LEN];
     private int delayWrite = 0;
@@ -404,8 +422,8 @@ public class V8SoundEngine {
             // 2. Header tube propagation, different primary length per bank
             bank1Delay[delayWrite] = bank1Raw;
             bank2Delay[delayWrite] = bank2Raw;
-            double b1Direct = readDelay(bank1Delay, BANK1_DELAY);
-            double b2Direct = readDelay(bank2Delay, BANK2_DELAY);
+            double b1Direct = readDelay(bank1Delay, HEADER_DELAY);
+            double b2Direct = readDelay(bank2Delay, HEADER_DELAY);
             delayWrite++;
             if (delayWrite >= DELAY_LEN) delayWrite = 0;
 
@@ -500,12 +518,12 @@ public class V8SoundEngine {
         updateAccelerationAndCruise();
         advanceWanderOscillators();
 
-        if (currentSpeedKmH < 2.5f && currentThrottle < 0.05f) {
-            runIdle();
-        } else if (currentSpeedKmH < 3.5f && currentThrottle >= 0.05f) {
-            runNeutralRev();
-        } else {
+        if (!isStationary()) {
             runGearedDrive();
+        } else if (currentThrottle < 0.05f) {
+            runIdle();
+        } else {
+            runNeutralRev();
         }
 
         notifyListener();
@@ -530,9 +548,9 @@ public class V8SoundEngine {
         float torqueDelta = targetTorqueNm - currentTorqueNm;
         currentTorqueNm += torqueDelta * (torqueDelta > 0f ? 0.55f : 0.22f);
 
-        // Speed now arrives at ~1 Hz as an integer, so interpolate slowly enough that the steps
-        // do not stair-step the RPM.
-        currentSpeedKmH += (targetSpeedKmH - currentSpeedKmH) * 0.045f;
+        // Speed arrives at ~1 Hz as an integer. Fast enough to keep the revs tracking the road
+        // (0.045 was a ~500 ms lag that read as disconnected), slow enough to hide the steps.
+        currentSpeedKmH += (targetSpeedKmH - currentSpeedKmH) * 0.10f;
 
         downshiftBlip *= 0.84f;
         targetShiftCut += (1.0f - targetShiftCut) * 0.16f;
@@ -554,9 +572,42 @@ public class V8SoundEngine {
             cruiseTimer = Math.max(0.0f, cruiseTimer - FRAME_DT / CRUISE_RELEASE_S);
         }
 
-        float torqueNorm = (currentTorqueNm > 0f) ? Math.min(1.0f, currentTorqueNm / 180.0f) : 0f;
-        float rawLoad = Math.max(currentThrottle, (currentThrottle * 0.55f + torqueNorm * 0.45f));
-        effectiveLoad = rawLoad * (1.0f - cruiseTimer * 0.45f);
+        effectiveLoad = computeLoad() * (1.0f - cruiseTimer * 0.45f);
+    }
+
+    /**
+     * True when the car is genuinely at rest and nothing is driving the wheels. Requires low
+     * torque as well as low speed, otherwise creeping away on motor torque alone would keep
+     * reporting idle.
+     */
+    private boolean isStationary() {
+        return currentSpeedKmH < STATIONARY_SPEED_KMH
+                && Math.abs(currentTorqueNm) < STATIONARY_TORQUE_NM;
+    }
+
+    /**
+     * @return motor torque available at the current road speed, in Nm
+     */
+    private float availableTorqueNm() {
+        if (currentSpeedKmH <= MOTOR_BASE_SPEED_KMH) return MOTOR_PEAK_TORQUE_NM;
+        return MOTOR_PEAK_TORQUE_NM * MOTOR_BASE_SPEED_KMH / currentSpeedKmH;
+    }
+
+    /**
+     * Engine load, 0..1.
+     *
+     * Standing still the pedal is the only meaningful signal, and it is what makes blipping the
+     * throttle satisfying. Once moving the pedal is only a request whose meaning changes with
+     * speed, so measured torque governs instead, normalised against what the motor can actually
+     * deliver at this speed. Without that normalisation the same pedal position sounds strained
+     * at high speed purely because field weakening has cut the available torque.
+     *
+     * Negative torque returns zero, letting the regen and overrun paths take over.
+     */
+    private float computeLoad() {
+        if (isStationary()) return currentThrottle;
+        float load = Math.max(0f, currentTorqueNm) / availableTorqueNm();
+        return Math.min(1.0f, load);
     }
 
     private void advanceWanderOscillators() {
@@ -577,11 +628,28 @@ public class V8SoundEngine {
 
     private void runNeutralRev() {
         currentGear = 0;
+
+        // Non-linear pedal map: the bottom of pedal travel covers a small rev range, so a light
+        // tap no longer targets the middle of the rev band. Linear mapping put 50% pedal at
+        // ~3500 RPM, which is why a tap felt like it shot straight to the top.
+        float curve = (float) Math.pow(currentThrottle, NEUTRAL_REV_CURVE);
         float lopeFlutter = (float) (Math.sin(cruiseWanderPhase1) * 22.0);
         float revTarget = BASE_IDLE_RPM
-                + (currentThrottle * (REDLINE_RPM - BASE_IDLE_RPM) * 0.92f)
+                + curve * (NEUTRAL_REV_CEILING_RPM - BASE_IDLE_RPM)
                 + lopeFlutter;
-        currentRpm += (revTarget - currentRpm) * 0.20f;
+
+        // Rate limit rather than exponential smoothing. A crank plus flywheel has finite angular
+        // acceleration, and the sound of spooling up is most of what makes a rev enjoyable; the
+        // old ~110 ms time constant reached the target in about a fifth of a second. The slower
+        // fall rate gives natural rev hang on release.
+        float rate = (revTarget > currentRpm) ? REV_RISE_RPM_PER_S : REV_FALL_RPM_PER_S;
+        float maxStep = rate * FRAME_DT;
+        float delta = revTarget - currentRpm;
+        if (delta > maxStep) delta = maxStep;
+        if (delta < -maxStep) delta = -maxStep;
+        currentRpm += delta;
+
+        if (currentRpm < BASE_IDLE_RPM) currentRpm = BASE_IDLE_RPM;
     }
 
     private void runGearedDrive() {
@@ -593,8 +661,9 @@ public class V8SoundEngine {
         // - Moderate throttle (30-50%): holds gear up to 3,400 - 4,400 RPM
         // - Deep throttle (70-100%): holds gear all the way to 5,800 - 6,200 RPM before shifting
         float baseUpshift = 2400f - (cruiseTimer * 300f);
-        float throttleDemand = Math.max(currentThrottle, effectiveLoad);
-        float throttleAggression = (float) Math.pow(throttleDemand, 1.15);
+        // Driven by effectiveLoad, which while moving is measured torque rather than pedal, so
+        // gear holding responds to what the car is actually doing.
+        float throttleAggression = (float) Math.pow(effectiveLoad, 1.15);
         float upshiftRpm = baseUpshift + (throttleAggression * 3900f);
         if (upshiftRpm > REDLINE_RPM - 400f) upshiftRpm = REDLINE_RPM - 400f;
 
@@ -636,10 +705,12 @@ public class V8SoundEngine {
         }
 
         // 2. Deceleration Downshift (Anti-Stall only):
-        // In an EV, downshifting for power is eliminated. Downshifts occur STRICTLY when
-        // coasting or braking (currentThrottle < 0.22f) as engine RPM drops below 1500 RPM.
+        // In an EV, downshifting for power is eliminated. Downshifts occur STRICTLY when the car
+        // is coasting or regenerating (effectiveLoad near zero, i.e. little or no motor torque)
+        // as engine RPM drops below 1500. Gated on load rather than pedal position, because a
+        // released pedal at speed means regen while a released pedal at rest means creep.
         float downshiftRpm = 1500f;
-        if (rawGearRpm < downshiftRpm && currentGear > 1 && currentThrottle < 0.22f) {
+        if (rawGearRpm < downshiftRpm && currentGear > 1 && effectiveLoad < 0.12f) {
             float rpmAfterDownshift = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 2];
             if (rpmAfterDownshift < REDLINE_RPM - 1200f) {
                 currentGear--;
