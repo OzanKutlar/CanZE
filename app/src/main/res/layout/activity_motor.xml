@@ -290,20 +290,20 @@
                 android:progress="0"
                 android:layout_marginBottom="12dp" />
 
-            <!-- Simulator Torque Slider -->
+            <!-- Simulator Torque Slider (-150 Nm to +250 Nm) -->
             <TextView
                 android:id="@+id/tv_sim_torque_label"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Simulated Torque: 0 Nm"
+                android:text="Simulated Torque: 0 Nm (Idle/Coast)"
                 android:textColor="#8A99AD"
                 android:textSize="12sp" />
             <SeekBar
                 android:id="@+id/sb_sim_torque"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:max="250"
-                android:progress="0" />
+                android:max="400"
+                android:progress="150" />
         </LinearLayout>
 
     </LinearLayout>

@@ -143,11 +143,14 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
                 if (!fromUser) return;
                 float simSpeed = sbSimSpeed.getProgress();
                 float simPedal = sbSimPedal.getProgress();
-                float simTorque = sbSimTorque.getProgress();
+                // Offset by 150: 0 -> -150 Nm, 150 -> 0 Nm, 400 -> +250 Nm
+                float simTorque = sbSimTorque.getProgress() - 150f;
 
                 tvSimSpeedLabel.setText(String.format(Locale.getDefault(), "Simulated Speed: %.0f km/h", simSpeed));
                 tvSimPedalLabel.setText(String.format(Locale.getDefault(), "Simulated Pedal: %.0f %%", simPedal));
-                tvSimTorqueLabel.setText(String.format(Locale.getDefault(), "Simulated Torque: %.0f Nm", simTorque));
+
+                String torqueStatus = simTorque < 0f ? "(Regen Braking)" : (simTorque > 120f ? "(Full Pull)" : "(Drive)");
+                tvSimTorqueLabel.setText(String.format(Locale.getDefault(), "Simulated Torque: %.0f Nm %s", simTorque, torqueStatus));
 
                 updateSpeed(simSpeed);
                 updatePedal(simPedal);
@@ -265,8 +268,17 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
 
     private void updateTorque(float newTorque) {
         int torqueInt = Math.round(newTorque);
-        animateProgress(pbTorque, (int) Math.max(0, lastTorque), Math.max(0, torqueInt));
-        tvTorqueVal.setText(String.format(Locale.getDefault(), "%d Nm", torqueInt));
+        if (torqueInt < 0) {
+            // Regenerative braking
+            animateProgress(pbTorque, (int) Math.max(0, -lastTorque), Math.min(250, -torqueInt));
+            tvTorqueVal.setText(String.format(Locale.getDefault(), "%d Nm (REGEN)", torqueInt));
+            tvTorqueVal.setTextColor(0xFF00E5FF); // Cyan for regenerative recovery
+        } else {
+            // Positive acceleration drive
+            animateProgress(pbTorque, (int) Math.max(0, lastTorque), Math.min(250, torqueInt));
+            tvTorqueVal.setText(String.format(Locale.getDefault(), "%d Nm", torqueInt));
+            tvTorqueVal.setTextColor(0xFFE040FB); // Magenta for motor power
+        }
         lastTorque = newTorque;
     }
 
