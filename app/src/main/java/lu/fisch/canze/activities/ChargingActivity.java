@@ -57,6 +57,27 @@ public class ChargingActivity extends CanzeActivity implements FieldListener, De
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_charging);
+        animateEntrance();
+    }
+
+    private void animateEntrance() {
+        int[] cardIds = {R.id.card_charging_power, R.id.card_dc_range, R.id.card_battery_telemetry};
+        long delay = 60;
+        for (int id : cardIds) {
+            final android.view.View v = findViewById(id);
+            if (v != null) {
+                v.setAlpha(0f);
+                v.setTranslationY(30f);
+                v.animate()
+                        .alpha(1f)
+                        .translationY(0f)
+                        .setDuration(350)
+                        .setStartDelay(delay)
+                        .setInterpolator(new android.view.animation.DecelerateInterpolator())
+                        .start();
+                delay += 70;
+            }
+        }
     }
 
     protected void initListeners() {
