@@ -94,21 +94,16 @@ public class V8SoundEngine {
     private static final double PHASE_WRAP = TWO_PI * 100.0; // multiples of 0.65 stay continuous
 
     /**
-     * A four stroke V8 fires eight times per 720 degrees, which is four firings per crank
-     * revolution. Set to 2.0 to restore the previous (octave low) behaviour.
+     * Sub-bass oscillator order. Kept at 2.0 to place the sub-harmonic deep in the
+     * 25 - 60 Hz chest-thumping bass pocket without high-pitched drone.
      */
-    private static final double SUB_BASS_ORDER = 4.0;
+    private static final double SUB_BASS_ORDER = 2.0;
 
-    // Acoustic delay lines. The two banks MUST use different offsets: a delay common to both
-    // banks before a summing point is inaudible, and the X-pipe crossover coefficients cancel
-    // algebraically in mono unless the crossover path carries its own extra delay.
-    private static final int DELAY_LEN = 256;
-    private static final int BANK1_DELAY = 48;      // ~1.09 ms
-    private static final int BANK2_DELAY = 88;      // ~2.00 ms
-    private static final int CROSSOVER_DELAY = 62;  // ~1.41 ms extra through the X-pipe
-    private final double[] bank1Delay = new double[DELAY_LEN];
-    private final double[] bank2Delay = new double[DELAY_LEN];
-    private int delayWrite = 0;
+    // Acoustic propagation delay lines (~1.45 ms buffer)
+    private static final int DELAY_SAMPLES = 64;
+    private final double[] bank1Delay = new double[DELAY_SAMPLES];
+    private final double[] bank2Delay = new double[DELAY_SAMPLES];
+    private int delayIdx = 0;
 
     // Precomputed blowdown pulse shape: sin^2(pi*x) * exp(-0.85x) over 170 degrees of crank.
     // Evaluating this analytically cost ~353k sin+exp calls per second.
@@ -124,15 +119,7 @@ public class V8SoundEngine {
         }
     }
 
-    // Output stage. These three constants are the previous hard coded numbers expressed relative
-    // to full scale (115000 / 31500, 27500 / 31500, 3500 / 31500), so at masterVolume = 1.0 the
-    // rendered waveform is identical to before. The difference is that masterVolume is now applied
-    // AFTER the character forming saturation, which is what makes the slider linear.
-    private static final double PCM_FULL_SCALE = 31500.0;
-    private static final double INTERNAL_DRIVE = 3.6508;
-    private static final double SOFT_KNEE = 0.8730;
-    private static final double KNEE_WIDTH = 0.1111;
-    private static final double PCM_HARD_CLAMP = 32000.0;
+    private static final double PCM_HARD_CLAMP = 31500.0;
 
     /** Notify the gauge at ~10.8 Hz instead of ~43 Hz. */
     private static final int LISTENER_DIVIDER = 4;
@@ -180,8 +167,6 @@ public class V8SoundEngine {
     // Acoustic filter states
     private double bank1Lp = 0.0;
     private double bank2Lp = 0.0;
-    private double cross1Lp = 0.0;
-    private double cross2Lp = 0.0;
     private double mufflerLp = 0.0;
     private double bodyResonator = 0.0;
     private double hpIn = 0.0;
@@ -393,32 +378,28 @@ public class V8SoundEngine {
             bank1Raw *= pulseAmplitude;
             bank2Raw *= pulseAmplitude;
 
-            // 2. Header tube propagation, different length per bank plus a longer crossover path
-            bank1Delay[delayWrite] = bank1Raw;
-            bank2Delay[delayWrite] = bank2Raw;
-            double b1Direct = readDelay(bank1Delay, BANK1_DELAY);
-            double b2Direct = readDelay(bank2Delay, BANK2_DELAY);
-            double b1Cross = readDelay(bank1Delay, BANK1_DELAY + CROSSOVER_DELAY);
-            double b2Cross = readDelay(bank2Delay, BANK2_DELAY + CROSSOVER_DELAY);
-            delayWrite++;
-            if (delayWrite >= DELAY_LEN) delayWrite = 0;
+            // 2. Primary header tube acoustic propagation delay
+            bank1Delay[delayIdx] = bank1Raw;
+            bank2Delay[delayIdx] = bank2Raw;
+            delayIdx = (delayIdx + 1) % DELAY_SAMPLES;
+            double b1Delayed = bank1Delay[delayIdx];
+            double b2Delayed = bank2Delay[delayIdx];
 
             // 3. Exhaust manifold acoustic low-pass (rolls off harsh content above ~950 Hz)
-            bank1Lp += (b1Direct - bank1Lp) * 0.14;
-            bank2Lp += (b2Direct - bank2Lp) * 0.14;
-            cross1Lp += (b1Cross - cross1Lp) * 0.14;
-            cross2Lp += (b2Cross - cross2Lp) * 0.14;
+            bank1Lp += (b1Delayed - bank1Lp) * 0.14;
+            bank2Lp += (b2Delayed - bank2Lp) * 0.14;
 
-            // 4. X-pipe: 0.5 * [(0.75*b1 + 0.25*b2cross) + (0.75*b2 + 0.25*b1cross)].
-            //    Unity DC gain, same as the old 0.5*(b1+b2), but the crossover no longer cancels.
-            double exhaustMix = 0.375 * (bank1Lp + bank2Lp) + 0.125 * (cross1Lp + cross2Lp);
+            // 4. X-Pipe Crossover (75% direct bank + 25% crossover balance)
+            double leftPipe = bank1Lp * 0.75 + bank2Lp * 0.25;
+            double rightPipe = bank2Lp * 0.75 + bank1Lp * 0.25;
+            double exhaustMix = (leftPipe + rightPipe) * 0.50;
 
             // 5. Muffler cavity resonance
             bodyResonator += (exhaustMix - bodyResonator) * 0.035;
             mufflerLp += (exhaustMix - mufflerLp) * 0.09;
             double deepTone = (exhaustMix * 0.70) + (bodyResonator * 0.60) + (mufflerLp * 0.40);
 
-            // 6. Sub-bass foundation at the firing order
+            // 6. Deep sub-bass foundation (25 - 60 Hz)
             double composite = deepTone + Math.sin(subBassPhase) * subBassAmplitude;
 
             // 7. Subsonic high-pass (~22 Hz), removes DC without touching audible bass
@@ -429,43 +410,23 @@ public class V8SoundEngine {
             double driven = hpOut * drive;
             double warmed = driven / (1.0 + Math.abs(driven) * 0.38);
 
-            // 9. Character stage at unity full scale, then master volume, then PCM scaling.
-            //    Applying master AFTER the knee and clip is what makes the slider linear: it used
-            //    to sit before a hard clamp that the signal was already 1.7x over at idle, so the
-            //    top half of the slider travel did nothing at all.
-            double shaped = warmed * smoothedVolume * smoothedShiftCut * INTERNAL_DRIVE;
-            shaped = softKnee(shaped);
+            // 9. Master gain with transparent soft-knee limiter (preserves deep rumble without harsh clipping)
+            double masterGain = warmed * smoothedVolume * smoothedShiftCut * smoothedMasterVolume * 115000.0;
 
-            double out = shaped * smoothedMasterVolume * PCM_FULL_SCALE;
+            double out;
+            if (masterGain > 27500.0) {
+                out = 27500.0 + 3500.0 * Math.tanh((masterGain - 27500.0) / 3500.0);
+            } else if (masterGain < -27500.0) {
+                out = -27500.0 + 3500.0 * Math.tanh((masterGain + 27500.0) / 3500.0);
+            } else {
+                out = masterGain;
+            }
+
             if (out > PCM_HARD_CLAMP) out = PCM_HARD_CLAMP;
             if (out < -PCM_HARD_CLAMP) out = -PCM_HARD_CLAMP;
 
             buffer[i] = (short) out;
         }
-    }
-
-    /** Soft knee then hard clip, both at unity full scale. */
-    private static double softKnee(double x) {
-        if (x > SOFT_KNEE) {
-            x = SOFT_KNEE + KNEE_WIDTH * Math.tanh((x - SOFT_KNEE) / KNEE_WIDTH);
-        } else if (x < -SOFT_KNEE) {
-            x = -SOFT_KNEE + KNEE_WIDTH * Math.tanh((x + SOFT_KNEE) / KNEE_WIDTH);
-        }
-        if (x > 1.0) return 1.0;
-        if (x < -1.0) return -1.0;
-        return x;
-    }
-
-    /**
-     * Reads a tap from a delay line. Must be called after the current sample has been written at
-     * delayWrite and before delayWrite advances.
-     *
-     * @param samples delay in samples, must be less than DELAY_LEN
-     */
-    private double readDelay(double[] line, int samples) {
-        int idx = delayWrite - samples;
-        if (idx < 0) idx += DELAY_LEN;
-        return line[idx];
     }
 
     /**
