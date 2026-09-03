@@ -47,6 +47,7 @@ import lu.fisch.canze.activities.DrivingActivity;
 import lu.fisch.canze.activities.HeatmapBatcompActivity;
 import lu.fisch.canze.activities.HeatmapCellvoltageActivity;
 import lu.fisch.canze.activities.MainActivity;
+import lu.fisch.canze.activities.MotorActivity;
 import lu.fisch.canze.activities.TyresActivity;
 
 
@@ -77,6 +78,7 @@ public class MainFragment extends Fragment {
 
         activateButton(view, R.id.buttonHeatmapCellvoltage, HeatmapCellvoltageActivity.class);
         activateButton(view, R.id.buttonHeatmapBatcomp,     HeatmapBatcompActivity.class);
+        activateButton(view, R.id.buttonMotor,              MotorActivity.class);
 
         getNews(view);
 
