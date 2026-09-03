@@ -17,8 +17,6 @@ import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTrack;
 
-import java.util.Random;
-
 /**
  * Real-time procedural cross-plane V8 engine sound synthesizer and virtual transmission.
  * Implements physical dual-bank exhaust pulse timing (1-8-4-3-6-5-7-2),
@@ -88,7 +86,6 @@ public class V8SoundEngine {
     private double bank2Filter = 0.0;
     private double exhaustBodyFilter = 0.0;
 
-    private final Random random = new Random();
     private EngineListener engineListener;
 
     public V8SoundEngine() {
@@ -256,7 +253,9 @@ public class V8SoundEngine {
                 double exhaustSignal = exhaustMix + (exhaustBodyFilter * 0.45);
 
                 // Deep sub-octave rumble for high displacement feel (5.0L - 6.2L V8 body)
-                double subRumble = Math.sin(crankPhase * 0.5) * 0.35 + Math.sin(crankPhase * 0.25) * 0.22;
+                // All harmonics are integer multiples of the 4*PI cycle (0.5, 1.0, 1.5)
+                // to guarantee smooth C1 continuity across cycle wraps with zero buzz
+                double subRumble = Math.sin(crankPhase * 0.5) * 0.35 + Math.sin(crankPhase * 1.0) * 0.20;
                 exhaustSignal += subRumble;
 
                 // Throttle body Helmholtz induction roar (throaty intake growl on load)
@@ -265,16 +264,13 @@ public class V8SoundEngine {
                     exhaustSignal += intakeRoar;
                 }
 
-                // Regenerative braking overrun burble & deceleration pops
+                // Regenerative braking compression rumble (clean, hollow, non-static burble)
                 if (isDecelRegen) {
-                    double compressionTone = Math.sin(crankPhase * 1.5) * 0.30;
-                    double burbleMod = 1.0 + (regenIntensity * 0.40 * Math.sin(regenModPhase));
-                    exhaustSignal = (exhaustSignal * burbleMod) + compressionTone;
-
-                    // Occasional overrun crackle on sharp throttle lift-off
-                    if (throttle < 0.05f && random.nextFloat() < (0.003f * regenIntensity)) {
-                        exhaustSignal += (random.nextFloat() * 1.6 - 0.8);
-                    }
+                    // Completely smooth, harmonic compression tone (1.5 * 4*PI = 6*PI, 0.5 * 4*PI = 2*PI)
+                    double compressionTone = Math.sin(crankPhase * 1.5) * 0.32 + Math.sin(crankPhase * 0.5) * 0.18;
+                    // Deep undulating cadence modulation (6-9 Hz rhythmic exhaust throb)
+                    double burbleMod = 1.0 + (regenIntensity * 0.35 * Math.sin(regenModPhase));
+                    exhaustSignal = (exhaustSignal * burbleMod) + (compressionTone * regenIntensity);
                 }
 
                 // Warm non-linear tube/combustion saturation (cubic / tanh soft overdrive)
