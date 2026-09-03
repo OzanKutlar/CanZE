@@ -50,6 +50,52 @@
                 android:paddingEnd="10dp" />
         </LinearLayout>
 
+        <!-- ENGINE SOUND VOLUME CONTROL CARD -->
+        <LinearLayout
+            android:id="@+id/card_volume"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_motor_card"
+            android:orientation="vertical"
+            android:padding="14dp"
+            android:layout_marginBottom="14dp">
+
+            <RelativeLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_alignParentLeft="true"
+                    android:layout_alignParentStart="true"
+                    android:text="ENGINE EXHAUST VOLUME"
+                    android:textColor="#8A99AD"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.08" />
+
+                <TextView
+                    android:id="@+id/tv_volume_val"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_alignParentRight="true"
+                    android:layout_alignParentEnd="true"
+                    android:text="100 %"
+                    android:textColor="#00E5FF"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+            </RelativeLayout>
+
+            <SeekBar
+                android:id="@+id/sb_engine_volume"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="250"
+                android:progress="100" />
+        </LinearLayout>
+
         <!-- V8 TACHOMETER RPM GAUGE CARD -->
         <LinearLayout
             android:id="@+id/card_tachometer"

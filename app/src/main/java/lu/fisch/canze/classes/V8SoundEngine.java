@@ -59,6 +59,7 @@ public class V8SoundEngine {
     private Thread audioThread;
     private volatile boolean isRunning = false;
     private volatile boolean isMuted = false;
+    private volatile float masterVolume = 1.0f;
 
     // Telemetry inputs (thread-safe, signed torque)
     private volatile float targetSpeedKmH = 0f;
@@ -109,6 +110,14 @@ public class V8SoundEngine {
 
     public boolean isMuted() {
         return isMuted;
+    }
+
+    public void setMasterVolume(float volume) {
+        this.masterVolume = Math.max(0.0f, Math.min(2.5f, volume));
+    }
+
+    public float getMasterVolume() {
+        return masterVolume;
     }
 
     public synchronized void start() {
@@ -177,21 +186,19 @@ public class V8SoundEngine {
             // 1 crank rev = 2 * PI radians, RPM = revs per min
             double crankRadPerSample = (rpm / 60.0) * (2.0 * Math.PI) / SAMPLE_RATE;
 
-            // Target master volume continuously unified at torque = 0 to prevent zero-crossing clicks
+            // Target master volume scaled for loud, clear acoustic presence (audible over road/wind/music)
             float targetVolume;
             if (isMuted) {
                 targetVolume = 0.0f;
             } else {
-                float baseVolume = 0.26f + (throttle * 0.18f);
+                // Boosted baseline: idle is crisp and punchy, throttle adds immediate bark
+                float baseVolume = (0.50f + (throttle * 0.28f)) * masterVolume;
                 if (torque >= 0f) {
-                    // Positive drive torque
-                    float loadFactor = Math.min(1.0f, torque / 180.0f);
-                    targetVolume = baseVolume + (loadFactor * 0.52f);
+                    float loadFactor = Math.min(1.0f, torque / 160.0f);
+                    targetVolume = baseVolume + (loadFactor * 0.50f * masterVolume);
                 } else {
-                    // Negative torque (regenerative braking)
-                    // Smoothly anchors at baseVolume when torque is 0 Nm with zero jump
-                    float regenFactor = Math.min(1.0f, -torque / 140.0f);
-                    targetVolume = baseVolume + (regenFactor * 0.38f);
+                    float regenFactor = Math.min(1.0f, -torque / 130.0f);
+                    targetVolume = baseVolume + (regenFactor * 0.40f * masterVolume);
                 }
             }
 
@@ -283,10 +290,11 @@ public class V8SoundEngine {
                 double drive = 1.0 + (Math.max(0f, torque) / 130.0 * 1.5) + (throttle * 0.6);
                 double saturated = Math.tanh(exhaustSignal * drive * 0.85);
 
-                // Output amplitude scaling with smooth sample-interpolated shift cut and ceiling limiting
-                double finalSample = saturated * smoothedVolume * smoothedShiftCut * 28000.0;
-                if (finalSample > 32000.0) finalSample = 32000.0;
-                if (finalSample < -32000.0) finalSample = -32000.0;
+                // Dynamic master scaling using soft analog tanh limiting into 16-bit PCM (max loudness without clipping)
+                double drivenSignal = saturated * smoothedVolume * smoothedShiftCut;
+                double finalSample = Math.tanh(drivenSignal * 1.35) * 32000.0;
+                if (finalSample > 32600.0) finalSample = 32600.0;
+                if (finalSample < -32600.0) finalSample = -32600.0;
 
                 buffer[i] = (short) finalSample;
             }

@@ -59,6 +59,9 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     private RpmGaugeView gaugeRpm;
     private Button btnSoundToggle;
     private V8SoundEngine soundEngine;
+    private SeekBar sbEngineVolume;
+    private TextView tvVolumeVal;
+    private static final String PREF_KEY_V8_VOLUME = "v8_master_volume";
 
     private View cardSimulator;
     private SeekBar sbSimSpeed;
@@ -118,8 +121,45 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
             }
         });
 
+        initVolumeControls();
         initSimulatorPanel();
         animateEntrance();
+    }
+
+    private void initVolumeControls() {
+        sbEngineVolume = findViewById(R.id.sb_engine_volume);
+        tvVolumeVal = findViewById(R.id.tv_volume_val);
+
+        android.content.SharedPreferences prefs = getSharedPreferences("lu.fisch.canze.settings", MODE_PRIVATE);
+        int savedVolume = prefs.getInt(PREF_KEY_V8_VOLUME, 100);
+        if (savedVolume < 10) savedVolume = 100;
+
+        sbEngineVolume.setProgress(savedVolume);
+        tvVolumeVal.setText(String.format(Locale.getDefault(), "%d %%", savedVolume));
+        if (soundEngine != null) {
+            soundEngine.setMasterVolume(savedVolume / 100.0f);
+        }
+
+        sbEngineVolume.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                tvVolumeVal.setText(String.format(Locale.getDefault(), "%d %%", progress));
+                if (soundEngine != null) {
+                    soundEngine.setMasterVolume(progress / 100.0f);
+                }
+                if (fromUser) {
+                    android.content.SharedPreferences.Editor editor = getSharedPreferences("lu.fisch.canze.settings", MODE_PRIVATE).edit();
+                    editor.putInt(PREF_KEY_V8_VOLUME, progress);
+                    editor.apply();
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {}
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
     }
 
     private void initSimulatorPanel() {
@@ -201,7 +241,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     }
 
     private void animateEntrance() {
-        int[] cardIds = {R.id.card_tachometer, R.id.card_speed, R.id.card_pedal, R.id.card_torque, R.id.card_simulator};
+        int[] cardIds = {R.id.card_volume, R.id.card_tachometer, R.id.card_speed, R.id.card_pedal, R.id.card_torque, R.id.card_simulator};
         long delay = 50;
         for (int id : cardIds) {
             final android.view.View v = findViewById(id);
