@@ -272,6 +272,7 @@ public abstract class Device {
                     if (!message.isError()) {
                         MainActivity.getInstance().appendDebugMessage("ok");
                         frame.registerSuccess();
+                        provenFrames.add(frame.getId());
                         // trigger the compete event of the message. It will update all fields linked to it's corresponding frame
                         message.onMessageCompleteEvent();
                         if (field.getInterval() == INTERVAL_ONCE) {
@@ -284,6 +285,7 @@ public abstract class Device {
                         if (!message.isError()) {
                             MainActivity.getInstance().appendDebugMessage("ok");
                             frame.registerSuccess();
+                            provenFrames.add(frame.getId());
                             message.onMessageCompleteEvent();
                             if (field.getInterval() == INTERVAL_ONCE) {
                                 removeActivityField(field);
@@ -333,11 +335,27 @@ public abstract class Device {
     /**
      * Blacklist a frame once it has failed often enough.
      *
+     * CAN ids that have answered correctly at least once this session.
+     */
+    private final java.util.HashSet<Integer> provenFrames = new java.util.HashSet<>();
+
+    /**
      * @param frame the frame that just failed
      * @return true if the frame is now blacklisted, so no device reset is warranted
      */
     private boolean blacklistIfDead(Frame frame) {
         if (frame == null) return false;
+
+        // A frame that has already answered correctly this session is not an unimplemented PID.
+        // Repeated timeouts on it mean the transport desynced (a stale line being read as the
+        // answer to the next command), and the cure for that is a re-initialisation, not a
+        // permanent blacklist. Blacklisting proven frames here is what used to kill pedal and
+        // torque data for the rest of the session after a single transient ELM error.
+        if (provenFrames.contains(frame.getId())) {
+            frame.registerSuccess();
+            MainActivity.debug("Device.blacklistIfDead: refusing to blacklist proven frame " + frame.getRID());
+            return false;
+        }
 
         if (frame.registerFailure() < Blacklist.FAILURE_THRESHOLD) return false;
 

@@ -316,24 +316,84 @@ public class ELM327 extends Device {
     }
 
     /**
+     * Set when a drain gave up before seeing the '>' prompt. When true the byte stream may
+     * still be one message out of phase, so the next command must resynchronise before
+     * trusting anything it reads back.
+     */
+    private volatile boolean bufferDirty = false;
+
+    /**
+     * Consume everything the dongle is still sending and return as soon as the line has been
+     * silent for quietMs. Costs virtually nothing when the buffer is already clean, and is
+     * bounded by maxMs when the ELM is still spewing ATMA lines.
+     *
+     * @param quietMs how long the line must be silent before we consider the buffer drained
+     * @param maxMs   hard upper bound so this can never hang the poller
+     */
+    private void drainUntilQuiet(int quietMs, int maxMs) {
+        if (quietMs < 0 || maxMs <= 0) return;
+
+        long start = Calendar.getInstance().getTimeInMillis();
+        long deadline = start + maxMs;
+        long lastByteAt = start;
+
+        try {
+            while (Calendar.getInstance().getTimeInMillis() < deadline) {
+                if (!BluetoothManager.getInstance().isConnected()) return;
+                if (BluetoothManager.getInstance().available() > 0) {
+                    BluetoothManager.getInstance().read();
+                    lastByteAt = Calendar.getInstance().getTimeInMillis();
+                } else {
+                    if (Calendar.getInstance().getTimeInMillis() - lastByteAt >= quietMs) return;
+                    Thread.sleep(1);
+                }
+            }
+        } catch (IOException | InterruptedException ignored) {
+            // treated as drained; the caller will re-check on the next command
+        }
+    }
+
+    /**
+     * Bring the ELM back into lockstep after it answered something unexpected. Drains whatever
+     * is still in flight, then sends a bare CR and consumes the fresh prompt it produces, so the
+     * next command reads its own answer rather than the previous one's.
+     */
+    private void resyncPrompt() {
+        MainActivity.debug("ELM327: resyncPrompt > stream out of phase, resynchronising");
+        drainUntilQuiet(10, 300);
+        BluetoothManager.getInstance().write("\r");
+        flushWithTimeout(120, '>');
+        bufferDirty = false;
+    }
+
+    /**
      * Actively halts ATMA monitoring and drains all in-flight CAN messages, STOPPED
      * indicators, and trailing characters until the prompt '>' character is consumed.
+     * If the prompt never arrives within the deadline the buffer is flagged dirty rather
+     * than silently abandoned, because leftover bytes would otherwise be read as the answer
+     * to the next command (this is what produced Error [atcra5d7] [<can data>]).
      */
     private void stopAtmaAndDrainPrompt() {
         sendNoWait("x");
-        long deadline = Calendar.getInstance().getTimeInMillis() + 150;
+        long deadline = Calendar.getInstance().getTimeInMillis() + 350;
         try {
             while (Calendar.getInstance().getTimeInMillis() < deadline) {
                 if (!BluetoothManager.getInstance().isConnected()) return;
                 if (BluetoothManager.getInstance().available() > 0) {
                     int c = BluetoothManager.getInstance().read();
-                    if (c == '>') return; // Prompt consumed, buffer is 100% clean
+                    if (c == '>') {
+                        bufferDirty = false;
+                        return; // Prompt consumed, buffer is 100% clean
+                    }
                 } else {
-                    Thread.sleep(2);
+                    Thread.sleep(1);
                 }
             }
         } catch (IOException | InterruptedException ignored) {
         }
+
+        bufferDirty = true;
+        MainActivity.debug("ELM327: stopAtmaAndDrainPrompt > no prompt within deadline, buffer marked dirty");
     }
 
     private boolean initCommandExpectOk(String command) {
@@ -353,10 +413,10 @@ public class ELM327 extends Device {
                 response = sendAndWaitForAnswer(command, 0, false, -1, addReturn);
             }
             if (response.toUpperCase().contains("OK")) return true;
-            // If the buffer received leftover in-flight data or prompt from ATMA, drain and retry
-            if (response.toUpperCase().contains("STOPPED") || response.contains("?")) {
-                flushWithTimeout(80, '>');
-            }
+            // ANY answer that is not OK means the stream is out of phase, not just STOPPED or '?'.
+            // A stale ATMA data line is exactly as much evidence of desync, and failing to resync
+            // here made the retry read the next stale line and fail too.
+            resyncPrompt();
         }
 
         MainActivity.toast(MainActivity.TOAST_ELM, "Error [" + command + "] [" + response.replace("\r", "<cr>").replace(" ", "<sp>") + "]");
@@ -392,12 +452,14 @@ public class ELM327 extends Device {
         if (!BluetoothManager.getInstance().isConnected()) return "";
 
         if (command != null) {
-            // PERFORMANCE FIX: Only flush if there is actually unread data waiting in the buffer.
-            // If the buffer is already empty (prompt already consumed), calling flushWithTimeout(100)
-            // caused a guaranteed 100ms Thread.sleep delay before every command!
+            // Only pay for a flush when there is something to flush: either bytes are already
+            // waiting, or a previous drain gave up before the prompt and bytes may still be in
+            // flight over SPP (available() would read 0 for those, which is how a stale ATMA line
+            // used to be mistaken for the answer to atcra).
             try {
-                if (BluetoothManager.getInstance().available() > 0) {
-                    flushWithTimeout(40, '>');
+                if (bufferDirty || BluetoothManager.getInstance().available() > 0) {
+                    drainUntilQuiet(10, 250);
+                    bufferDirty = false;
                 }
             } catch (IOException ignored) {
             }

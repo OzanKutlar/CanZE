@@ -30,6 +30,7 @@ import java.util.Locale;
 
 import lu.fisch.canze.R;
 import lu.fisch.canze.actors.Field;
+import lu.fisch.canze.actors.Utils;
 import lu.fisch.canze.bluetooth.BluetoothManager;
 import lu.fisch.canze.classes.V8SoundEngine;
 import lu.fisch.canze.devices.Device;
@@ -84,6 +85,12 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     private float lastSpeed = 0f;
     private float lastPedal = 0f;
     private float lastTorque = 0f;
+
+    // Live telemetry fed straight to the synthesizer from the poller thread (km/h, %, Nm).
+    // Kept separate from the lastX display values, which are only ever touched on the UI thread.
+    private volatile float liveSpeed = 0f;
+    private volatile float livePedal = 0f;
+    private volatile float liveTorque = 0f;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -144,8 +151,10 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
         tvVolumeVal = findViewById(R.id.tv_volume_val);
 
         android.content.SharedPreferences prefs = getSharedPreferences("lu.fisch.canze.settings", MODE_PRIVATE);
-        int savedVolume = prefs.getInt(PREF_KEY_V8_VOLUME, 100);
-        if (savedVolume < 10) savedVolume = 100;
+        // contains() rather than a magic minimum, so a deliberate 0% survives backgrounding
+        int savedVolume = prefs.contains(PREF_KEY_V8_VOLUME) ? prefs.getInt(PREF_KEY_V8_VOLUME, 100) : 100;
+        if (savedVolume < 0) savedVolume = 0;
+        if (savedVolume > sbEngineVolume.getMax()) savedVolume = sbEngineVolume.getMax();
 
         sbEngineVolume.setProgress(savedVolume);
         tvVolumeVal.setText(String.format(Locale.getDefault(), "%d %%", savedVolume));
@@ -392,7 +401,9 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
         // at 500ms, the ELM327 stays locked on filter 186 without ping-ponging ATCRA filters.
         // This allows Pedal and Torque to update continuously at 15-25 Hz with minimal latency.
         addField(SID_MeanEffectiveTorque, Device.INTERVAL_ASAPFAST, R.id.tv_torque_val);
-        addField(SID_RealSpeed, 500, R.id.tv_speed_val);
+        // 1000ms: speed is an integer that barely moves between samples, and every ATCRA switch
+        // is another chance for the ELM stream to desynchronise.
+        addField(SID_RealSpeed, 1000, R.id.tv_speed_val);
 
         Field pedalField = MainActivity.fields.getBySID(SID_Pedal);
         if (pedalField != null) {
@@ -404,36 +415,62 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     public void onFieldUpdateEvent(final Field field) {
         if (field == null || isTestRunning || isTestStopping) return;
 
+        final String sid = field.getSID();
+        if (sid == null) return;
+
+        final double rawVal = field.getValue();
+        if (Double.isNaN(rawVal)) return;
+
+        // Feed the synthesizer directly on the poller thread. setInputs() only writes volatile
+        // fields, so this is thread-safe, and it avoids queuing every pedal sample behind
+        // whatever else the main looper happens to be doing.
+        switch (sid) {
+            case SID_RealSpeed:
+                liveSpeed = (float) rawVal;
+                break;
+            case SID_Pedal:
+                livePedal = (float) rawVal;
+                break;
+            case SID_MeanEffectiveTorque:
+                liveTorque = (float) rawVal;
+                break;
+            default:
+                return;
+        }
+
+        if (soundEngine != null) {
+            soundEngine.setInputs(liveSpeed, livePedal, liveTorque);
+        }
+
+        final float displayValue = (float) rawVal;
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                String sid = field.getSID();
-                double rawVal = field.getValue();
-                if (Double.isNaN(rawVal)) return;
-
                 switch (sid) {
                     case SID_RealSpeed:
-                        updateSpeed((float) rawVal);
+                        updateSpeed(displayValue);
                         break;
                     case SID_Pedal:
-                        updatePedal((float) rawVal);
+                        updatePedal(displayValue);
                         break;
                     case SID_MeanEffectiveTorque:
-                        updateTorque((float) rawVal);
+                        updateTorque(displayValue);
                         break;
-                }
-                if (soundEngine != null) {
-                    soundEngine.setInputs(lastSpeed, lastPedal, lastTorque);
                 }
             }
         });
     }
 
+    /**
+     * @param newSpeed road speed in km/h. Converted for display only; the synthesizer is always
+     *                 fed km/h regardless of the miles setting.
+     */
     private void updateSpeed(float newSpeed) {
         if (newSpeed < 0) newSpeed = 0;
-        animateProgress(pbSpeed, (int) lastSpeed, (int) newSpeed);
-        tvSpeedVal.setText(String.format(Locale.getDefault(), "%.0f", newSpeed));
-        lastSpeed = newSpeed;
+        float displaySpeed = (float) Utils.kmOrMiles(newSpeed);
+        animateProgress(pbSpeed, (int) lastSpeed, (int) displaySpeed);
+        tvSpeedVal.setText(String.format(Locale.getDefault(), "%.0f", displaySpeed));
+        lastSpeed = displaySpeed;
     }
 
     private void updatePedal(float newPedal) {
@@ -460,11 +497,17 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
         lastTorque = newTorque;
     }
 
+    /**
+     * Sets the bar directly. Frame 186 now arrives 15-25 times a second and fires several field
+     * callbacks per packet, so allocating a 180ms ObjectAnimator per update meant dozens of
+     * overlapping animations per second competing over the same bar. That looked jerkier than
+     * no animation at all and put steady GC pressure on the thread we just made latency critical.
+     *
+     * @param from retained for call-site compatibility, unused
+     */
     private void animateProgress(ProgressBar bar, int from, int to) {
-        if (bar == null || from == to) return;
-        ObjectAnimator anim = ObjectAnimator.ofInt(bar, "progress", from, to);
-        anim.setDuration(180);
-        anim.setInterpolator(new DecelerateInterpolator());
-        anim.start();
+        if (bar == null) return;
+        if (to < 0) to = 0;
+        bar.setProgress(to);
     }
 }
