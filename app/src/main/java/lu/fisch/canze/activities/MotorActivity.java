@@ -66,6 +66,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
 
     // Test simulation state (10% throttle)
     private boolean isTestRunning = false;
+    private boolean isTestStopping = false;
     private final android.os.Handler testHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private Runnable testRunnable;
     private float simDriveSpeed = 0f;
@@ -238,20 +239,45 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
         testRunnable = new Runnable() {
             @Override
             public void run() {
-                if (!isTestRunning) return;
+                if (!isTestRunning && !isTestStopping) return;
 
-                // Smoothly bring pedal to 10%
-                simDrivePedal += (10.0f - simDrivePedal) * 0.08f;
+                if (isTestStopping) {
+                    // Smooth coast-down deceleration
+                    simDrivePedal *= 0.70f; // Rapidly release pedal to 0%
+                    if (simDrivePedal < 0.1f) simDrivePedal = 0f;
 
-                // Gradually accelerate up to ~65 km/h
-                if (simDriveSpeed < 65.0f) {
-                    simDriveSpeed += 0.22f; // ~4.4 km/h per second
+                    // Mild coasting deceleration regen (-18 Nm)
+                    float targetDecelTorque = -18.0f;
+                    simDriveTorque += (targetDecelTorque - simDriveTorque) * 0.15f;
+
+                    // Smooth speed coast-down (takes ~3.5 seconds to reach 0 km/h)
+                    simDriveSpeed -= 0.35f;
+                    if (simDriveSpeed <= 0f) {
+                        simDriveSpeed = 0f;
+                        simDrivePedal = 0f;
+                        simDriveTorque = 0f;
+                        isTestStopping = false;
+                        if (btnTestDrive != null) {
+                            btnTestDrive.setText("▶ TEST (10%)");
+                            btnTestDrive.setTextColor(0xFFFFD600); // Yellow when idle
+                        }
+                    }
+                } else {
+                    // Active Acceleration & Cruise phase
+                    simDrivePedal += (10.0f - simDrivePedal) * 0.08f;
+
+                    if (simDriveSpeed < 65.0f) {
+                        simDriveSpeed += 0.22f; // Accelerating smoothly
+                        // High acceleration torque at launch (~72 Nm), tapering to ~38 Nm
+                        float targetTorque = 72.0f - (simDriveSpeed / 65.0f * 34.0f);
+                        simDriveTorque += (targetTorque - simDriveTorque) * 0.10f;
+                    } else {
+                        // Steady-State 65 km/h Cruise:
+                        // Once at speed, road load drops to cruise maintenance (~14 Nm)
+                        float cruiseTorque = 14.0f;
+                        simDriveTorque += (cruiseTorque - simDriveTorque) * 0.08f;
+                    }
                 }
-
-                // Realistic EV motor torque under 10% pedal:
-                // Starts strong at launch (~75 Nm), settles to ~35 Nm at cruising speed
-                float targetTorque = 75.0f - (simDriveSpeed / 65.0f * 38.0f);
-                simDriveTorque += (targetTorque - simDriveTorque) * 0.10f;
 
                 updateSpeed(simDriveSpeed);
                 updatePedal(simDrivePedal);
@@ -261,37 +287,49 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
                     soundEngine.setInputs(simDriveSpeed, simDrivePedal, simDriveTorque);
                 }
 
-                // 50 ms loop (20 updates/sec)
-                testHandler.postDelayed(this, 50);
+                if (isTestRunning || isTestStopping) {
+                    testHandler.postDelayed(this, 50);
+                }
             }
         };
 
         btnTestDrive.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (!isTestRunning) {
+                if (!isTestRunning && !isTestStopping) {
                     // Start Test Drive
                     isTestRunning = true;
+                    isTestStopping = false;
                     simDriveSpeed = 0f;
                     simDrivePedal = 0f;
                     simDriveTorque = 0f;
                     btnTestDrive.setText("⏹ STOP TEST");
                     btnTestDrive.setTextColor(0xFFFF5252); // Red when active
                     testHandler.post(testRunnable);
-                } else {
-                    // Stop Test Drive
-                    stopTestDrive();
+                } else if (isTestRunning) {
+                    // Begin smooth coast-down deceleration
+                    startCoastDown();
                 }
             }
         });
     }
 
-    private void stopTestDrive() {
+    private void startCoastDown() {
         isTestRunning = false;
+        isTestStopping = true;
+        if (btnTestDrive != null) {
+            btnTestDrive.setText("⏳ COASTING...");
+            btnTestDrive.setTextColor(0xFF00E5FF); // Cyan while decelerating
+        }
+    }
+
+    private void forceStopTest() {
+        isTestRunning = false;
+        isTestStopping = false;
         testHandler.removeCallbacks(testRunnable);
         if (btnTestDrive != null) {
             btnTestDrive.setText("▶ TEST (10%)");
-            btnTestDrive.setTextColor(0xFFFFD600); // Yellow when idle
+            btnTestDrive.setTextColor(0xFFFFD600);
         }
         updatePedal(0f);
         updateSpeed(0f);
@@ -304,8 +342,8 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     @Override
     protected void onPause() {
         super.onPause();
-        if (isTestRunning) {
-            stopTestDrive();
+        if (isTestRunning || isTestStopping) {
+            forceStopTest();
         }
         if (soundEngine != null) {
             soundEngine.stop();
@@ -315,8 +353,8 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (isTestRunning) {
-            stopTestDrive();
+        if (isTestRunning || isTestStopping) {
+            forceStopTest();
         }
         Field pedalField = MainActivity.fields.getBySID(SID_Pedal);
         if (pedalField != null) {
@@ -363,7 +401,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
 
     @Override
     public void onFieldUpdateEvent(final Field field) {
-        if (field == null || isTestRunning) return;
+        if (field == null || isTestRunning || isTestStopping) return;
 
         runOnUiThread(new Runnable() {
             @Override

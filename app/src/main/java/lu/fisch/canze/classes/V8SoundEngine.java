@@ -80,6 +80,9 @@ public class V8SoundEngine {
     private float currentThrottle = 0f;
     private float currentTorqueNm = 0f;
     private float currentSpeedKmH = 0f;
+    private float prevSpeedKmH = 0f;
+    private float vehicleAccel = 0f;
+    private float cruiseTimer = 0f;
     private float effectiveLoad = 0f;
     private float downshiftBlip = 0f;
     private float targetShiftCut = 1.0f;
@@ -377,9 +380,24 @@ public class V8SoundEngine {
         downshiftBlip *= 0.84f;
         targetShiftCut += (1.0f - targetShiftCut) * 0.16f;
 
+        // Calculate vehicle acceleration (km/h per frame update)
+        vehicleAccel = currentSpeedKmH - prevSpeedKmH;
+        prevSpeedKmH = currentSpeedKmH;
+
+        // Detect steady-state cruise vs acceleration
+        boolean isCruising = (Math.abs(vehicleAccel) < 0.12f && currentSpeedKmH > 25.0f);
+        if (isCruising) {
+            cruiseTimer = Math.min(2.0f, cruiseTimer + 0.05f);
+        } else {
+            cruiseTimer = Math.max(0.0f, cruiseTimer - 0.10f);
+        }
+
         // Effective Engine Load: blends pedal demand with motor pull
+        // Relaxes load significantly during steady cruise so engine doesn't roar
         float torqueNorm = (currentTorqueNm > 0f) ? Math.min(1.0f, currentTorqueNm / 180.0f) : 0f;
-        effectiveLoad = Math.max(currentThrottle, (currentThrottle * 0.55f + torqueNorm * 0.45f));
+        float rawLoad = Math.max(currentThrottle, (currentThrottle * 0.55f + torqueNorm * 0.45f));
+        float cruiseLoadFactor = 1.0f - (cruiseTimer / 2.0f * 0.45f); // Drops acoustic load by up to 45% during cruise
+        effectiveLoad = rawLoad * cruiseLoadFactor;
 
         // Advance idle cam lope oscillator
         lopePhase += 0.12;
@@ -408,17 +426,21 @@ public class V8SoundEngine {
             float wheelRpm = (currentSpeedKmH * 1000f) / (WHEEL_CIRCUMFERENCE_M * 60f);
             if (currentGear == 0) currentGear = 1;
 
-            // Progressive shift points based on effective load
-            float upshiftRpm = 2100f + (effectiveLoad * 4200f);
-            float downshiftRpm = 1300f + (effectiveLoad * 1700f);
+            // Progressive shift points based on effective load and cruise state:
+            // - While accelerating: shifts later (2,200 - 5,500 RPM) to pull cleanly
+            // - While cruising at steady speed: shifts early (down to 1,600 RPM) into 5th/6th gear overdrive
+            float baseUpshift = 2100f - (cruiseTimer / 2.0f * 520f); // Drops from 2100 to 1580 RPM on cruise
+            float upshiftRpm = baseUpshift + (effectiveLoad * 3800f);
+            float downshiftRpm = 1180f + (effectiveLoad * 1500f);
 
-            // Kickdown on sudden throttle or strong wheel torque
-            boolean isKickdown = (currentThrottle > 0.68f || (currentTorqueNm > 160f && currentSpeedKmH > 15f));
+            // Kickdown on sudden throttle or strong wheel torque (downshift for passing)
+            boolean isKickdown = (currentThrottle > 0.68f || (currentTorqueNm > 170f && currentSpeedKmH > 15f));
             if (isKickdown && currentGear > 2) {
                 float potentialLowerRpm = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 2];
                 if (potentialLowerRpm < 5800f) {
                     currentGear--;
                     downshiftBlip = 480f;
+                    cruiseTimer = 0f;
                 }
             }
 
@@ -430,7 +452,7 @@ public class V8SoundEngine {
                 targetShiftCut = 0.82f;
             } else if (rawGearRpm < downshiftRpm && currentGear > 1 && !isKickdown) {
                 currentGear--;
-                downshiftBlip = 280f;
+                downshiftBlip = 260f;
             }
 
             // 2. Torque converter slip: fluid coupling slips 1.8% to 4.2% based on engine load
