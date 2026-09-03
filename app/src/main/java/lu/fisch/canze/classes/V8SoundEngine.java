@@ -87,12 +87,12 @@ public class V8SoundEngine {
     private static final float STATIONARY_SPEED_KMH = 2.5f;
     private static final float STATIONARY_TORQUE_NM = 5f;
 
-    // Free revving in neutral. The ceiling is deliberately well below redline, and the rev is
-    // rate limited rather than smoothed so the crank and flywheel audibly spool up.
-    private static final float NEUTRAL_REV_CEILING_RPM = 4600f;
-    private static final float REV_RISE_RPM_PER_S = 2600f;
-    private static final float REV_FALL_RPM_PER_S = 1900f;
-    private static final double NEUTRAL_REV_CURVE = 1.9;
+    // Physical flywheel torque integration in neutral (dOmega/dt = T_net / J).
+    // Zero load means any positive throttle accelerates the crankshaft continuously upward
+    // until the rev limiter, with rise rate proportional to pedal depth.
+    private static final float NEUTRAL_REV_CEILING_RPM = 5200f;
+    private static final float REV_DRIVE_ACCEL_RPM_S = 6800f; // Max full-throttle angular acceleration
+    private static final float REV_NATURAL_DECEL_RPM_S = 2200f; // Engine braking & friction on lift-off
 
     // Minimum road speeds (km/h) required before upshifting into each gear [1->2 .. 5->6]
     private static final float[] MIN_UPSHIFT_SPEEDS = {0f, 28f, 50f, 70f, 88f, 99f};
@@ -629,27 +629,41 @@ public class V8SoundEngine {
     private void runNeutralRev() {
         currentGear = 0;
 
-        // Non-linear pedal map: the bottom of pedal travel covers a small rev range, so a light
-        // tap no longer targets the middle of the rev band. Linear mapping put 50% pedal at
-        // ~3500 RPM, which is why a tap felt like it shot straight to the top.
-        float curve = (float) Math.pow(currentThrottle, NEUTRAL_REV_CURVE);
-        float lopeFlutter = (float) (Math.sin(cruiseWanderPhase1) * 22.0);
-        float revTarget = BASE_IDLE_RPM
-                + curve * (NEUTRAL_REV_CEILING_RPM - BASE_IDLE_RPM)
-                + lopeFlutter;
+        // Physical flywheel integration: In neutral with zero load, pedal represents net drive torque.
+        // Holding any constant pedal continuously accelerates the engine upwards.
+        float throttle = currentThrottle;
 
-        // Rate limit rather than exponential smoothing. A crank plus flywheel has finite angular
-        // acceleration, and the sound of spooling up is most of what makes a rev enjoyable; the
-        // old ~110 ms time constant reached the target in about a fifth of a second. The slower
-        // fall rate gives natural rev hang on release.
-        float rate = (revTarget > currentRpm) ? REV_RISE_RPM_PER_S : REV_FALL_RPM_PER_S;
-        float maxStep = rate * FRAME_DT;
-        float delta = revTarget - currentRpm;
-        if (delta > maxStep) delta = maxStep;
-        if (delta < -maxStep) delta = -maxStep;
-        currentRpm += delta;
+        if (throttle > 0.04f) {
+            // Engine drive torque accelerates the crank:
+            // Light throttle (20-30%) builds revs steadily; heavy throttle (80-100%) screams upward
+            float throttleEffort = (float) Math.pow(throttle, 1.25);
+            float driveAccel = throttleEffort * REV_DRIVE_ACCEL_RPM_S;
 
-        if (currentRpm < BASE_IDLE_RPM) currentRpm = BASE_IDLE_RPM;
+            // Internal rotational friction grows with RPM (opposing torque)
+            float internalFriction = (currentRpm / NEUTRAL_REV_CEILING_RPM) * (REV_DRIVE_ACCEL_RPM_S * 0.25f);
+            float netRpmAccel = driveAccel - internalFriction;
+
+            // Soft rev-limiter governor near ceiling
+            if (currentRpm > NEUTRAL_REV_CEILING_RPM - 400f) {
+                float overLimitFactor = (currentRpm - (NEUTRAL_REV_CEILING_RPM - 400f)) / 400f;
+                netRpmAccel *= (1.0f - Math.min(1.0f, overLimitFactor));
+            }
+
+            currentRpm += netRpmAccel * FRAME_DT;
+
+            // Subtle rev-limiter bounce/flutter when pinned at the ceiling
+            if (currentRpm >= NEUTRAL_REV_CEILING_RPM) {
+                currentRpm = NEUTRAL_REV_CEILING_RPM - (float) (Math.sin(cruiseWanderPhase1 * 4.0) * 35.0);
+            }
+        } else {
+            // Lift-off: Natural engine friction and pumping loss decels revs back to idle
+            float decelRate = REV_NATURAL_DECEL_RPM_S * (1.0f + (currentRpm / NEUTRAL_REV_CEILING_RPM) * 0.5f);
+            currentRpm -= decelRate * FRAME_DT;
+        }
+
+        if (currentRpm < BASE_IDLE_RPM) {
+            currentRpm = BASE_IDLE_RPM;
+        }
     }
 
     private void runGearedDrive() {
