@@ -588,24 +588,17 @@ public class V8SoundEngine {
         float wheelRpm = (currentSpeedKmH * 1000f) / (WHEEL_CIRCUMFERENCE_M * 60f);
         if (currentGear == 0) currentGear = 1;
 
-        // While accelerating shift late for a strong pull; on steady cruise relax into overdrive.
-        float upshiftRpm = (2300f - cruiseTimer * 400f) + (effectiveLoad * 3700f);
-        float downshiftRpm = 1250f + (effectiveLoad * 1400f);
+        // Progressive throttle-delayed upshift schedule:
+        // - Light throttle / steady cruise: shifts early (1,900 - 2,200 RPM)
+        // - Moderate throttle (30-50%): holds gear up to 3,200 - 4,200 RPM
+        // - Deep throttle (70-100%): holds gear all the way to 5,800 - 6,200 RPM before shifting
+        float baseUpshift = 2100f - (cruiseTimer * 400f);
+        float throttleDemand = Math.max(currentThrottle, effectiveLoad);
+        float throttleAggression = (float) Math.pow(throttleDemand, 1.15);
+        float upshiftRpm = baseUpshift + (throttleAggression * 4100f);
+        if (upshiftRpm > REDLINE_RPM - 400f) upshiftRpm = REDLINE_RPM - 400f;
 
-        boolean isKickdown = (currentThrottle > 0.68f
-                || (currentTorqueNm > 175f && currentSpeedKmH > 15f));
-
-        if (isKickdown && currentGear > 2 && shiftLockout <= 0f) {
-            float potentialLowerRpm = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 2];
-            if (potentialLowerRpm < 5800f) {
-                currentGear--;
-                downshiftBlip = 480f;
-                cruiseTimer = 0f;
-                shiftLockout = SHIFT_LOCKOUT_S;
-            }
-        }
-
-        evaluateShift(wheelRpm, upshiftRpm, downshiftRpm, isKickdown);
+        evaluateShift(wheelRpm, upshiftRpm);
 
         // Torque converter fluid coupling slips 1.8% to 4.2% with load
         float converterSlip = 1.018f + (effectiveLoad * 0.024f);
@@ -628,12 +621,13 @@ public class V8SoundEngine {
         currentRpm += (targetDynamicRpm - currentRpm) * 0.22f;
     }
 
-    private void evaluateShift(float wheelRpm, float upshiftRpm, float downshiftRpm, boolean isKickdown) {
+    private void evaluateShift(float wheelRpm, float upshiftRpm) {
         if (shiftLockout > 0f) return;
 
         float rawGearRpm = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 1];
         float minSpeedForNextGear = (currentGear < 6) ? MIN_UPSHIFT_SPEEDS[currentGear] : Float.MAX_VALUE;
 
+        // 1. Progressive Upshift: triggered when engine revs pass the throttle-delayed threshold
         if (rawGearRpm > upshiftRpm && currentGear < 6 && currentSpeedKmH >= minSpeedForNextGear) {
             currentGear++;
             targetShiftCut = 0.82f;
@@ -641,14 +635,15 @@ public class V8SoundEngine {
             return;
         }
 
-        if (rawGearRpm < downshiftRpm && currentGear > 1 && !isKickdown) {
-            // Hysteresis guard: never drop into a gear that would immediately upshift again.
-            // The 1<->2 pair has almost no natural margin (ratio spread 1.60 vs a shift window
-            // of ~1.58), so without this it hunts.
+        // 2. Deceleration Downshift (Anti-Stall only):
+        // In an EV, downshifting for power is eliminated. Downshifts occur STRICTLY when
+        // coasting or braking (currentThrottle < 0.22f) as engine RPM drops near idle.
+        float downshiftRpm = 1150f;
+        if (rawGearRpm < downshiftRpm && currentGear > 1 && currentThrottle < 0.22f) {
             float rpmAfterDownshift = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 2];
-            if (rpmAfterDownshift < upshiftRpm * 0.92f) {
+            if (rpmAfterDownshift < upshiftRpm * 0.90f) {
                 currentGear--;
-                downshiftBlip = 260f;
+                downshiftBlip = 180f;
                 shiftLockout = SHIFT_LOCKOUT_S;
             }
         }
