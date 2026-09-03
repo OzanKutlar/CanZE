@@ -90,8 +90,12 @@ public class Plotter extends Drawable {
 
     @Override
     public void draw(Graphics g) {
-        // black border
-        g.setColor(Color.BLACK);
+        // modern dark card background
+        g.setColor(getBackground());
+        g.fillRect(x, y, width, height);
+
+        // subtle border
+        g.setColor(new Color(38, 51, 70));
         g.drawRect(x, y, width, height);
 
         // calculate fill height
@@ -122,7 +126,7 @@ public class Plotter extends Drawable {
             {
                 if(minorTicks>0)
                 {
-                    g.setColor(Color.GRAY);
+                    g.setColor(new Color(50, 65, 88));
                     ax = x+width-barWidth-5;
                     ay = y+i;
                     bx = x+width-barWidth;
@@ -133,14 +137,14 @@ public class Plotter extends Drawable {
                 if(majorTicks!=0 && sum % majorTicks == 0) {
                     if(majorTicks>0)
                     {
-                        g.setColor(Color.GRAY_LIGHT);
+                        g.setColor(new Color(28, 38, 56)); // subtle grid
                         ax = x+width-barWidth-10;
                         ay = y+i;
                         bx = x+width;
                         by = y+i;
                         g.drawLine((int)ax, (int)ay, (int)bx, (int)by);
 
-                        g.setColor(Color.GRAY);
+                        g.setColor(new Color(50, 65, 88));
                         ax = x+width-barWidth-10;
                         ay = y+i;
                         bx = x+width-barWidth;
@@ -151,7 +155,7 @@ public class Plotter extends Drawable {
                     // draw String
                     if(showLabels)
                     {
-                        g.setColor(Color.GRAY);
+                        g.setColor(new Color(138, 153, 173));
                         String text = (actual)+"";
                         double sw = g.stringWidth(text);
                         bx = x+width-barWidth-16-sw;
@@ -181,7 +185,8 @@ public class Plotter extends Drawable {
         MainActivity.debug("Values min "+minValues.size());
         MainActivity.debug("Values max "+maxValues.size());/**/
 
-        // draw the graph
+        // inner graph box
+        g.setColor(new Color(38, 51, 70));
         g.drawRect(x+width-barWidth, y, barWidth, height);
         // min & max
         /*
@@ -245,29 +250,32 @@ public class Plotter extends Drawable {
             double w = (double) barWidth/values.size();
             double h = (double) getHeight()/(getMax()-getMin());
 
-            double lastX = Double.NaN;
-            double lastY = Double.NaN;
-            g.setColor(Color.RED);
+            double barPadding = Math.max(1, w * 0.15);
+            int barDrawW = (int) Math.max(2, w - 2 * barPadding);
+
+            Color barColor = isFieldSkipped() ? new Color(204, 0, 0) : new Color(0, 229, 255);
+            Color capColor = isFieldSkipped() ? new Color(255, 60, 60) : new Color(130, 245, 255);
+
             for(int i=0; i<values.size(); i++)
             {
                 try {
-                    //MainActivity.debug("Value "+i+": "+values.get(i));
-                    //MainActivity.debug("Value "+i+": "+values.get(i)+" Max: "+getMax()+" Min: "+getMin()+" height: "+getHeight()+" h: "+h);
-                    double mx = w / 2 + i * w;
-                    double my = getHeight() - (values.get(i) - getMin()) * h;
-                    int rayon = 2;
-                    g.fillOval(getX() + getWidth() - barWidth + (int) mx - rayon, getY() + (int) my - rayon, 2 * rayon + 1, 2 * rayon + 1);
-                    if (i > 0) {
-                        g.drawLine(getX() + getWidth() - barWidth + (int) lastX,
-                                getY() + (int) lastY,
-                                getX() + getWidth() - barWidth + (int) mx,
-                                getY() + (int) my);
-                    }
-                    lastX = mx;
-                    lastY = my;
-                } catch (IndexOutOfBoundsException e) {
-                    /* simply ignore */
-                } catch (NullPointerException e) {
+                    double val = values.get(i);
+                    if (Double.isNaN(val)) continue;
+                    double barH = (val - getMin()) * h;
+                    if (barH < 0) barH = 0;
+                    if (barH > getHeight()) barH = getHeight();
+
+                    int bx = getX() + getWidth() - barWidth + (int)(i * w + barPadding);
+                    int by = getY() + getHeight() - (int) barH;
+
+                    // Draw modern sleek column bar
+                    g.setColor(barColor);
+                    g.fillRect(bx, by, barDrawW, (int) barH);
+
+                    // Illuminated cap on top of each cell bar
+                    g.setColor(capColor);
+                    g.fillRect(bx, by, barDrawW, Math.min(3, (int) barH));
+                } catch (IndexOutOfBoundsException | NullPointerException e) {
                     /* simply ignore */
                 }
             }
@@ -276,8 +284,8 @@ public class Plotter extends Drawable {
         // draw the title
         if(title!=null && !title.equals(""))
         {
-            g.setColor(Color.BLUE);
-            g.setTextSize(20);
+            g.setColor(getTitleColor());
+            g.setTextSize(18);
             int th = g.stringHeight(title);
             int tx = getX()+width-barWidth+8;
             int ty = getY()+th+4;

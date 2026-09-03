@@ -65,11 +65,11 @@ public abstract class Drawable implements FieldListener {
     protected String title = "";
     protected int timeSale = 1;
 
-    // colors
-    protected Color foreground   = Color.BLACK;
-    protected Color background   = Color.WHITE;
-    protected Color intermediate = Color.GRAY_LIGHT;
-    protected Color titleColor   = Color.BLUE;
+    // modern dark cockpit colors
+    protected Color foreground   = new Color(138, 153, 173); // #8A99AD slate
+    protected Color background   = new Color(22, 29, 43);    // #161D2B dark card
+    protected Color intermediate = new Color(31, 41, 61);    // #1F293D subtle grid
+    protected Color titleColor   = new Color(0, 229, 255);   // #00E5FF neon cyan
 
     protected DrawSurfaceInterface drawSurface = null;
 

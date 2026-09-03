@@ -117,19 +117,19 @@ public class Timeplot extends Drawable {
     }
 
     private Color getColor(int i) {
-        if (i == 0) return Color.RENAULT_RED;
-        else if (i == 1) return Color.BLUE;
-        else return Color.GREEN_DARK;
+        if (i == 0) return new Color(0, 229, 255);    // Neon Cyan #00E5FF
+        else if (i == 1) return new Color(224, 64, 251); // Neon Magenta #E040FB
+        else return new Color(0, 230, 118);            // Neon Green #00E676
     }
 
     @Override
     public void draw(Graphics g) {
-        // background
+        // modern dark card background
         g.setColor(getBackground());
         g.fillRect(x, y, width, height);
 
-        // black border
-        g.setColor(getForeground());
+        // subtle border
+        g.setColor(new Color(38, 51, 70));
         g.drawRect(x, y, width, height);
 
         // calculate fill height
@@ -230,7 +230,7 @@ public class Timeplot extends Drawable {
         }
 
         // draw the vertical grid
-        g.setColor(getIntermediate());
+        g.setColor(new Color(28, 38, 56));
         long start = (Calendar.getInstance().getTimeInMillis() / 1000);
         int interval = 60 / timeSale;
 
@@ -282,7 +282,7 @@ public class Timeplot extends Drawable {
                 this.values.put(sid, values);
             }
 
-            g.setColor(getForeground());
+            g.setColor(new Color(38, 51, 70));
             g.drawRect(x + width - barWidth - spaceAlt, y, barWidth, graphHeight);
             if (values.size() > 0) {
 
@@ -688,8 +688,8 @@ public class Timeplot extends Drawable {
             }
         }
 
-        // black border
-        g.setColor(getForeground());
+        // outer accent border
+        g.setColor(new Color(38, 51, 70));
         g.drawRect(x, y, width, height);
     }
 
