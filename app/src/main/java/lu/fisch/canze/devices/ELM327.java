@@ -290,10 +290,6 @@ public class ELM327 extends Device {
                     if (count-- == 0) return false;
                 }
             } else {
-                // Fast check: if nothing is pending in the input buffer, there's nothing to flush
-                if (BluetoothManager.getInstance().isConnected() && BluetoothManager.getInstance().available() == 0 && eom == '>') {
-                    return true;
-                }
                 long end = Calendar.getInstance().getTimeInMillis() + timeout;
                 while (Calendar.getInstance().getTimeInMillis() < end) {
                     // read a byte
@@ -319,6 +315,27 @@ public class ELM327 extends Device {
         return true;
     }
 
+    /**
+     * Actively halts ATMA monitoring and drains all in-flight CAN messages, STOPPED
+     * indicators, and trailing characters until the prompt '>' character is consumed.
+     */
+    private void stopAtmaAndDrainPrompt() {
+        sendNoWait("x");
+        long deadline = Calendar.getInstance().getTimeInMillis() + 150;
+        try {
+            while (Calendar.getInstance().getTimeInMillis() < deadline) {
+                if (!BluetoothManager.getInstance().isConnected()) return;
+                if (BluetoothManager.getInstance().available() > 0) {
+                    int c = BluetoothManager.getInstance().read();
+                    if (c == '>') return; // Prompt consumed, buffer is 100% clean
+                } else {
+                    Thread.sleep(2);
+                }
+            }
+        } catch (IOException | InterruptedException ignored) {
+        }
+    }
+
     private boolean initCommandExpectOk(String command) {
         return initCommandExpectOk(command, false, true);
     }
@@ -331,17 +348,17 @@ public class ELM327 extends Device {
         String response = "";
         for (int i = 2; i > 0; i--) {
             if (untilEmpty) {
-                response = sendAndWaitForAnswer(command, 40, true, -1, addReturn); // wait 40 ms for untilempty
+                response = sendAndWaitForAnswer(command, 40, true, -1, addReturn);
             } else {
-                response = sendAndWaitForAnswer(command, 0, false, -1, addReturn); // // just one line
+                response = sendAndWaitForAnswer(command, 0, false, -1, addReturn);
             }
-            if (response.toUpperCase().contains("OK")) return true; // we're done if we got an OK
+            if (response.toUpperCase().contains("OK")) return true;
+            // If the buffer received leftover in-flight data or prompt from ATMA, drain and retry
+            if (response.toUpperCase().contains("STOPPED") || response.contains("?")) {
+                flushWithTimeout(80, '>');
+            }
         }
 
-        // we've tried and tried and failed here
-        /* if (timeoutLogLevel >= 2 || (timeoutLogLevel >= 1 && !command.startsWith("atma") && command.startsWith("at"))) {
-            MainActivity.toast("Err " + command + " [" + response.replace("\r", "<cr>").replace(" ", "<sp>") + "]");
-        } */
         MainActivity.toast(MainActivity.TOAST_ELM, "Error [" + command + "] [" + response.replace("\r", "<cr>").replace(" ", "<sp>") + "]");
         MainActivity.debug("ELM327.initCommandExpectOk c:" + command + ", untilempty:" + untilEmpty + " res:" + response);
 
@@ -528,9 +545,8 @@ public class ELM327 extends Device {
         // Send atma to read the broadcast line
         hexData = sendAndWaitForAnswer("atma", 0, false, 1, true);
 
-        // Immediately stop atma monitor
-        sendNoWait("x");
-        flushWithTimeout(50, '>');
+        // Immediately stop atma and fully drain trailing bytes until '>' prompt
+        stopAtmaAndDrainPrompt();
         generalTimeout = DEFAULT_TIMEOUT;
 
         // atar     (clear filter)
