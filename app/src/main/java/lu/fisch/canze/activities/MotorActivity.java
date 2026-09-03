@@ -64,7 +64,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     private TextView tvVolumeVal;
     private static final String PREF_KEY_V8_VOLUME = "v8_master_volume";
 
-    // Test simulation state (10% throttle)
+    // Test simulation state (20% throttle)
     private boolean isTestRunning = false;
     private boolean isTestStopping = false;
     private final android.os.Handler testHandler = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -246,35 +246,35 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
                     simDrivePedal *= 0.70f; // Rapidly release pedal to 0%
                     if (simDrivePedal < 0.1f) simDrivePedal = 0f;
 
-                    // Mild coasting deceleration regen (-18 Nm)
-                    float targetDecelTorque = -18.0f;
+                    // Mild coasting deceleration regen (-20 Nm)
+                    float targetDecelTorque = -20.0f;
                     simDriveTorque += (targetDecelTorque - simDriveTorque) * 0.15f;
 
-                    // Smooth speed coast-down (takes ~3.5 seconds to reach 0 km/h)
-                    simDriveSpeed -= 0.35f;
+                    // Smooth speed coast-down (~4 seconds to reach 0 km/h from 105 km/h)
+                    simDriveSpeed -= 0.42f;
                     if (simDriveSpeed <= 0f) {
                         simDriveSpeed = 0f;
                         simDrivePedal = 0f;
                         simDriveTorque = 0f;
                         isTestStopping = false;
                         if (btnTestDrive != null) {
-                            btnTestDrive.setText("▶ TEST (10%)");
+                            btnTestDrive.setText("▶ TEST (20%)");
                             btnTestDrive.setTextColor(0xFFFFD600); // Yellow when idle
                         }
                     }
                 } else {
-                    // Active Acceleration & Cruise phase
-                    simDrivePedal += (10.0f - simDrivePedal) * 0.08f;
+                    // Active Acceleration to 20% pedal
+                    simDrivePedal += (20.0f - simDrivePedal) * 0.08f;
 
-                    if (simDriveSpeed < 65.0f) {
-                        simDriveSpeed += 0.22f; // Accelerating smoothly
-                        // High acceleration torque at launch (~72 Nm), tapering to ~38 Nm
-                        float targetTorque = 72.0f - (simDriveSpeed / 65.0f * 34.0f);
+                    if (simDriveSpeed < 105.0f) {
+                        simDriveSpeed += 0.32f; // 20% acceleration builds cleanly past 100 km/h
+                        // Realistic EV motor torque under 20% pedal: ~115 Nm at launch tapering to ~48 Nm
+                        float targetTorque = 115.0f - (simDriveSpeed / 105.0f * 67.0f);
                         simDriveTorque += (targetTorque - simDriveTorque) * 0.10f;
                     } else {
-                        // Steady-State 65 km/h Cruise:
-                        // Once at speed, road load drops to cruise maintenance (~14 Nm)
-                        float cruiseTorque = 14.0f;
+                        // Steady-State 105 km/h Highway Cruise:
+                        // Road load settles to highway maintenance (~22 Nm)
+                        float cruiseTorque = 22.0f;
                         simDriveTorque += (cruiseTorque - simDriveTorque) * 0.08f;
                     }
                 }
@@ -328,7 +328,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
         isTestStopping = false;
         testHandler.removeCallbacks(testRunnable);
         if (btnTestDrive != null) {
-            btnTestDrive.setText("▶ TEST (10%)");
+            btnTestDrive.setText("▶ TEST (20%)");
             btnTestDrive.setTextColor(0xFFFFD600);
         }
         updatePedal(0f);

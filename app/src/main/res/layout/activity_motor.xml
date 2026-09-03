@@ -42,7 +42,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="34dp"
                 android:background="#1E283D"
-                android:text="▶ TEST (10%)"
+                android:text="▶ TEST (20%)"
                 android:textColor="#FFD600"
                 android:textSize="11sp"
                 android:textStyle="bold"

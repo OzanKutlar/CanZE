@@ -50,12 +50,16 @@ public class V8SoundEngine {
             90.0 * Math.PI / 180.0   // Cyl 8 (Bank 2)
     };
 
-    // Transmission gear ratios (1st to 6th)
-    private static final float[] GEAR_RATIOS = {3.60f, 2.20f, 1.50f, 1.10f, 0.85f, 0.68f};
-    private static final float FINAL_DRIVE = 3.85f;
+    // Transmission gear ratios (1st to 6th) - tuned for authentic V8 muscle spacing
+    private static final float[] GEAR_RATIOS = {3.45f, 2.15f, 1.52f, 1.12f, 0.86f, 0.68f};
+    private static final float FINAL_DRIVE = 3.65f;
     private static final float WHEEL_CIRCUMFERENCE_M = 1.95f;
     private static final float BASE_IDLE_RPM = 780f;
     private static final float REDLINE_RPM = 6600f;
+
+    // Minimum road speeds (km/h) required before upshifting into each gear [1->2, 2->3, 3->4, 4->5, 5->6]
+    // Guarantees 6th gear only engages at ~100 km/h and holds 3rd/4th gear longer
+    private static final float[] MIN_UPSHIFT_SPEEDS = {0f, 28f, 50f, 70f, 88f, 99f};
 
     // Acoustic delay lines for header length propagation
     private static final int DELAY_SAMPLES = 64; // ~1.5 ms sound travel delay
@@ -427,14 +431,14 @@ public class V8SoundEngine {
             if (currentGear == 0) currentGear = 1;
 
             // Progressive shift points based on effective load and cruise state:
-            // - While accelerating: shifts later (2,200 - 5,500 RPM) to pull cleanly
-            // - While cruising at steady speed: shifts early (down to 1,600 RPM) into 5th/6th gear overdrive
-            float baseUpshift = 2100f - (cruiseTimer / 2.0f * 520f); // Drops from 2100 to 1580 RPM on cruise
-            float upshiftRpm = baseUpshift + (effectiveLoad * 3800f);
-            float downshiftRpm = 1180f + (effectiveLoad * 1500f);
+            // - While accelerating: shifts later (2,400 - 5,600 RPM) for strong gear pull
+            // - While cruising at steady speed: relaxes to ~1,800 - 2,100 RPM
+            float baseUpshift = 2300f - (cruiseTimer / 2.0f * 400f);
+            float upshiftRpm = baseUpshift + (effectiveLoad * 3700f);
+            float downshiftRpm = 1250f + (effectiveLoad * 1400f);
 
-            // Kickdown on sudden throttle or strong wheel torque (downshift for passing)
-            boolean isKickdown = (currentThrottle > 0.68f || (currentTorqueNm > 170f && currentSpeedKmH > 15f));
+            // Kickdown on sudden throttle stomp or strong wheel torque
+            boolean isKickdown = (currentThrottle > 0.68f || (currentTorqueNm > 175f && currentSpeedKmH > 15f));
             if (isKickdown && currentGear > 2) {
                 float potentialLowerRpm = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 2];
                 if (potentialLowerRpm < 5800f) {
@@ -445,9 +449,10 @@ public class V8SoundEngine {
             }
 
             float rawGearRpm = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 1];
+            float minSpeedForNextGear = (currentGear < 6) ? MIN_UPSHIFT_SPEEDS[currentGear] : 999f;
 
-            // Shift evaluation with subtle transmission acoustic dip
-            if (rawGearRpm > upshiftRpm && currentGear < 6) {
+            // Shift evaluation with speed gates & subtle transmission acoustic dip
+            if (rawGearRpm > upshiftRpm && currentGear < 6 && currentSpeedKmH >= minSpeedForNextGear) {
                 currentGear++;
                 targetShiftCut = 0.82f;
             } else if (rawGearRpm < downshiftRpm && currentGear > 1 && !isKickdown) {
