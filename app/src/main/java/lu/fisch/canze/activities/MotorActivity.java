@@ -18,18 +18,23 @@
 package lu.fisch.canze.activities;
 
 import android.animation.ObjectAnimator;
-import android.animation.ValueAnimator;
 import android.os.Bundle;
+import android.view.View;
 import android.view.animation.DecelerateInterpolator;
+import android.widget.Button;
 import android.widget.ProgressBar;
+import android.widget.SeekBar;
 import android.widget.TextView;
 
 import java.util.Locale;
 
 import lu.fisch.canze.R;
 import lu.fisch.canze.actors.Field;
+import lu.fisch.canze.bluetooth.BluetoothManager;
+import lu.fisch.canze.classes.V8SoundEngine;
 import lu.fisch.canze.devices.Device;
 import lu.fisch.canze.interfaces.FieldListener;
+import lu.fisch.canze.widgets.RpmGaugeView;
 
 /**
  * Modern real-time motor cockpit display showing Pedal Position, Motor Torque, and Vehicle Speed
@@ -50,6 +55,18 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
 
     private TextView tvTorqueVal;
     private ProgressBar pbTorque;
+
+    private RpmGaugeView gaugeRpm;
+    private Button btnSoundToggle;
+    private V8SoundEngine soundEngine;
+
+    private View cardSimulator;
+    private SeekBar sbSimSpeed;
+    private SeekBar sbSimPedal;
+    private SeekBar sbSimTorque;
+    private TextView tvSimSpeedLabel;
+    private TextView tvSimPedalLabel;
+    private TextView tvSimTorqueLabel;
 
     private float lastSpeed = 0f;
     private float lastPedal = 0f;
@@ -72,11 +89,110 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
 
         tvSpeedUnit.setText(MainActivity.milesMode ? "mph" : "km/h");
 
+        gaugeRpm = findViewById(R.id.gauge_rpm);
+        btnSoundToggle = findViewById(R.id.btn_sound_toggle);
+
+        // V8 Sound Generator
+        soundEngine = new V8SoundEngine();
+        soundEngine.setEngineListener(new V8SoundEngine.EngineListener() {
+            @Override
+            public void onEngineStateChanged(final float rpm, final int gear) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gaugeRpm != null) {
+                            gaugeRpm.setRpmAndGear(rpm, gear);
+                        }
+                    }
+                });
+            }
+        });
+
+        btnSoundToggle.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                boolean nowMuted = !soundEngine.isMuted();
+                soundEngine.setMuted(nowMuted);
+                btnSoundToggle.setText(nowMuted ? "🔇 V8 SOUND: OFF" : "🔊 V8 SOUND: ON");
+                btnSoundToggle.setTextColor(nowMuted ? 0xFF8A99AD : 0xFF00E5FF);
+            }
+        });
+
+        initSimulatorPanel();
         animateEntrance();
     }
 
+    private void initSimulatorPanel() {
+        cardSimulator = findViewById(R.id.card_simulator);
+        sbSimSpeed = findViewById(R.id.sb_sim_speed);
+        sbSimPedal = findViewById(R.id.sb_sim_pedal);
+        sbSimTorque = findViewById(R.id.sb_sim_torque);
+        tvSimSpeedLabel = findViewById(R.id.tv_sim_speed_label);
+        tvSimPedalLabel = findViewById(R.id.tv_sim_pedal_label);
+        tvSimTorqueLabel = findViewById(R.id.tv_sim_torque_label);
+
+        // Show simulation sliders when disconnected or in debug mode
+        boolean disconnected = !BluetoothManager.getInstance().isConnected();
+        if (disconnected || MainActivity.debugLogMode) {
+            cardSimulator.setVisibility(View.VISIBLE);
+        }
+
+        SeekBar.OnSeekBarChangeListener simListener = new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                if (!fromUser) return;
+                float simSpeed = sbSimSpeed.getProgress();
+                float simPedal = sbSimPedal.getProgress();
+                float simTorque = sbSimTorque.getProgress();
+
+                tvSimSpeedLabel.setText(String.format(Locale.getDefault(), "Simulated Speed: %.0f km/h", simSpeed));
+                tvSimPedalLabel.setText(String.format(Locale.getDefault(), "Simulated Pedal: %.0f %%", simPedal));
+                tvSimTorqueLabel.setText(String.format(Locale.getDefault(), "Simulated Torque: %.0f Nm", simTorque));
+
+                updateSpeed(simSpeed);
+                updatePedal(simPedal);
+                updateTorque(simTorque);
+                soundEngine.setInputs(simSpeed, simPedal, simTorque);
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {}
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {}
+        };
+
+        sbSimSpeed.setOnSeekBarChangeListener(simListener);
+        sbSimPedal.setOnSeekBarChangeListener(simListener);
+        sbSimTorque.setOnSeekBarChangeListener(simListener);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (soundEngine != null) {
+            soundEngine.start();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (soundEngine != null) {
+            soundEngine.stop();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (soundEngine != null) {
+            soundEngine.stop();
+        }
+    }
+
     private void animateEntrance() {
-        int[] cardIds = {R.id.card_speed, R.id.card_pedal, R.id.card_torque};
+        int[] cardIds = {R.id.card_tachometer, R.id.card_speed, R.id.card_pedal, R.id.card_torque, R.id.card_simulator};
         long delay = 50;
         for (int id : cardIds) {
             final android.view.View v = findViewById(id);
@@ -117,12 +233,15 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
                 switch (sid) {
                     case SID_RealSpeed:
                         updateSpeed((float) rawVal);
+                        soundEngine.setInputs(lastSpeed, lastPedal, lastTorque);
                         break;
                     case SID_Pedal:
                         updatePedal((float) rawVal);
+                        soundEngine.setInputs(lastSpeed, lastPedal, lastTorque);
                         break;
                     case SID_MeanEffectiveTorque:
                         updateTorque((float) rawVal);
+                        soundEngine.setInputs(lastSpeed, lastPedal, lastTorque);
                         break;
                 }
             }

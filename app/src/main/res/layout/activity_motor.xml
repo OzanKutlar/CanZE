@@ -37,15 +37,34 @@
                 android:textSize="20sp"
                 android:textStyle="bold" />
 
-            <TextView
-                android:id="@+id/tv_live_indicator"
+            <Button
+                android:id="@+id/btn_sound_toggle"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="● LIVE"
-                android:textColor="#00E676"
-                android:textSize="12sp"
+                android:layout_height="34dp"
+                android:background="#1E283D"
+                android:text="🔊 V8 SOUND: ON"
+                android:textColor="#00E5FF"
+                android:textSize="11sp"
                 android:textStyle="bold"
-                android:letterSpacing="0.1" />
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp" />
+        </LinearLayout>
+
+        <!-- V8 TACHOMETER RPM GAUGE CARD -->
+        <LinearLayout
+            android:id="@+id/card_tachometer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_motor_card"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:gravity="center"
+            android:layout_marginBottom="14dp">
+
+            <lu.fisch.canze.widgets.RpmGaugeView
+                android:id="@+id/gauge_rpm"
+                android:layout_width="240dp"
+                android:layout_height="180dp" />
         </LinearLayout>
 
         <!-- SPEED CARD (HERO) -->
@@ -201,6 +220,90 @@
                 android:max="250"
                 android:progress="0"
                 android:progressDrawable="@drawable/motor_progress_torque" />
+        </LinearLayout>
+
+        <!-- SIMULATOR CONTROLS (VISIBLE WHEN DISCONNECTED) -->
+        <LinearLayout
+            android:id="@+id/card_simulator"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_motor_card"
+            android:orientation="vertical"
+            android:padding="18dp"
+            android:layout_marginTop="14dp"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="12dp">
+
+                <View
+                    android:layout_width="4dp"
+                    android:layout_height="16dp"
+                    android:background="#FFD600"
+                    android:layout_marginEnd="8dp"
+                    android:layout_marginRight="8dp" />
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="SIMULATOR CONTROLS (DISCONNECTED)"
+                    android:textColor="#FFD600"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.05" />
+            </LinearLayout>
+
+            <!-- Simulator Speed Slider -->
+            <TextView
+                android:id="@+id/tv_sim_speed_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Simulated Speed: 0 km/h"
+                android:textColor="#8A99AD"
+                android:textSize="12sp" />
+            <SeekBar
+                android:id="@+id/sb_sim_speed"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="160"
+                android:progress="0"
+                android:layout_marginBottom="12dp" />
+
+            <!-- Simulator Pedal Slider -->
+            <TextView
+                android:id="@+id/tv_sim_pedal_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Simulated Pedal: 0 %"
+                android:textColor="#8A99AD"
+                android:textSize="12sp" />
+            <SeekBar
+                android:id="@+id/sb_sim_pedal"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="100"
+                android:progress="0"
+                android:layout_marginBottom="12dp" />
+
+            <!-- Simulator Torque Slider -->
+            <TextView
+                android:id="@+id/tv_sim_torque_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Simulated Torque: 0 Nm"
+                android:textColor="#8A99AD"
+                android:textSize="12sp" />
+            <SeekBar
+                android:id="@+id/sb_sim_torque"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="250"
+                android:progress="0" />
         </LinearLayout>
 
     </LinearLayout>
