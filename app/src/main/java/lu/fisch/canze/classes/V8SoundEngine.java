@@ -377,9 +377,18 @@ public class V8SoundEngine {
         pedalWanderSmoothed += (pedalWanderTarget - pedalWanderSmoothed) * 0.08f;
         float throttleWithTremor = Math.max(0.0f, Math.min(1.0f, rawThrottle + (rawThrottle > 0.02f ? pedalWanderSmoothed : 0.0f)));
 
-        // Smooth inputs
-        currentThrottle += (throttleWithTremor - currentThrottle) * 0.20f;
-        currentTorqueNm += (torque - currentTorqueNm) * 0.22f;
+        // Fast-attack, smooth-release throttle response:
+        // When pressing the pedal down, react immediately (0.65f attack) so sound begins on the very first packet.
+        // When releasing the pedal, decay smoothly (0.22f release) to simulate natural engine inertia.
+        float throttleDelta = throttleWithTremor - currentThrottle;
+        float throttleRate = (throttleDelta > 0f) ? 0.65f : 0.22f;
+        currentThrottle += throttleDelta * throttleRate;
+
+        // Torque fast attack on load demand
+        float torqueDelta = torque - currentTorqueNm;
+        float torqueRate = (torqueDelta > 0f) ? 0.55f : 0.22f;
+        currentTorqueNm += torqueDelta * torqueRate;
+
         currentSpeedKmH += (speed - currentSpeedKmH) * 0.20f;
         downshiftBlip *= 0.84f;
         targetShiftCut += (1.0f - targetShiftCut) * 0.16f;

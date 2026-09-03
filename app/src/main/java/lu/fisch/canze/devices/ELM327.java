@@ -392,7 +392,15 @@ public class ELM327 extends Device {
         if (!BluetoothManager.getInstance().isConnected()) return "";
 
         if (command != null) {
-            flushWithTimeout(100, '>');
+            // PERFORMANCE FIX: Only flush if there is actually unread data waiting in the buffer.
+            // If the buffer is already empty (prompt already consumed), calling flushWithTimeout(100)
+            // caused a guaranteed 100ms Thread.sleep delay before every command!
+            try {
+                if (BluetoothManager.getInstance().available() > 0) {
+                    flushWithTimeout(40, '>');
+                }
+            } catch (IOException ignored) {
+            }
             // send the command
             //connectedBluetoothThread.write(command + "\r\n");
             BluetoothManager.getInstance().write(command + (addReturn ? "\r" : ""));

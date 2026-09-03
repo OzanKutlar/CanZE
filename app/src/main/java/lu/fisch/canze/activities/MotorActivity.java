@@ -388,10 +388,11 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     @Override
     protected void initListeners() {
         // Frame 186 contains both MeanEffectiveTorque (186.16) and Pedal (186.40).
-        // Querying SID_MeanEffectiveTorque and SID_RealSpeed (5D7.0) at INTERVAL_ASAPFAST
-        // gives maximal throughput, while SID_Pedal receives updates on the exact same 186 packet.
+        // By keeping SID_MeanEffectiveTorque in INTERVAL_ASAPFAST and scheduling SID_RealSpeed (5D7.0)
+        // at 500ms, the ELM327 stays locked on filter 186 without ping-ponging ATCRA filters.
+        // This allows Pedal and Torque to update continuously at 15-25 Hz with minimal latency.
         addField(SID_MeanEffectiveTorque, Device.INTERVAL_ASAPFAST, R.id.tv_torque_val);
-        addField(SID_RealSpeed, Device.INTERVAL_ASAPFAST, R.id.tv_speed_val);
+        addField(SID_RealSpeed, 500, R.id.tv_speed_val);
 
         Field pedalField = MainActivity.fields.getBySID(SID_Pedal);
         if (pedalField != null) {
