@@ -19,15 +19,10 @@ import android.media.AudioTrack;
 import java.util.Random;
 
 /**
- * High-performance real-time procedural cross-plane V8 engine sound synthesizer
- * and torque-responsive virtual transmission.
- *
- * Based on acoustic principles from engine-sim:
- * - Physical exhaust blowdown shockwave pulse generation (dP/dt finite-difference radiation)
- * - Physical dual-bank delay lines for asymmetric crossplane phase interference (1-8-4-3-6-5-7-2)
- * - Resonant muffler chamber modeling
- * - Torque-coupled transmission holding, kickdown, and deceleration overrun crackles
- * - Full dynamic-range audio pipeline (3x+ loudness with transparent soft-knee saturation)
+ * Deep-rumble real-time procedural cross-plane V8 engine sound synthesizer.
+ * Generates authentic low-end acoustic blowdown waves (50 - 250 Hz),
+ * crossplane bank offset burble (1-8-4-3-6-5-7-2), low-pass muffler cavity acoustics,
+ * and torque-coupled multi-gear transmission dynamics.
  */
 public class V8SoundEngine {
 
@@ -59,14 +54,14 @@ public class V8SoundEngine {
     private static final float[] GEAR_RATIOS = {3.60f, 2.20f, 1.50f, 1.10f, 0.85f, 0.68f};
     private static final float FINAL_DRIVE = 3.85f;
     private static final float WHEEL_CIRCUMFERENCE_M = 1.95f;
-    private static final float BASE_IDLE_RPM = 800f;
-    private static final float REDLINE_RPM = 6800f;
+    private static final float BASE_IDLE_RPM = 780f;
+    private static final float REDLINE_RPM = 6600f;
 
-    // Acoustic delay lines for left/right header propagation delay
-    private static final int HEADER_DELAY_SAMPLES = 88; // ~2.0 ms sound propagation delay
-    private final double[] bank1DelayLine = new double[HEADER_DELAY_SAMPLES];
-    private final double[] bank2DelayLine = new double[HEADER_DELAY_SAMPLES];
-    private int delayWriteIdx = 0;
+    // Acoustic delay lines for header length propagation
+    private static final int DELAY_SAMPLES = 64; // ~1.5 ms sound travel delay
+    private final double[] bank1Delay = new double[DELAY_SAMPLES];
+    private final double[] bank2Delay = new double[DELAY_SAMPLES];
+    private int delayIdx = 0;
 
     private AudioTrack audioTrack;
     private Thread audioThread;
@@ -90,32 +85,23 @@ public class V8SoundEngine {
     private float targetShiftCut = 1.0f;
     private float smoothedShiftCut = 1.0f;
 
-    // Overrun state
-    private float overrunTimer = 0f;
-    private float prevThrottle = 0f;
-    private final Random rng = new Random();
-
-    // Oscillators & acoustics
+    // Oscillators
     private double crankPhase = 0.0;
-    private double lopePhase1 = 0.0;
-    private double lopePhase2 = 0.0;
-    private double intakePhase = 0.0;
-    private final double[] cylinderJitter = new double[8];
+    private double lopePhase = 0.0;
+    private double subBassPhase = 0.0;
 
-    // Acoustic differentiator & filter memory
-    private double prevBank1 = 0.0;
-    private double prevBank2 = 0.0;
-    private double resonatorY1 = 0.0;
-    private double resonatorY2 = 0.0;
-    private double highPassIn = 0.0;
-    private double highPassOut = 0.0;
+    // Acoustic filter states (smooth muffler integration)
+    private double bank1Lp = 0.0;
+    private double bank2Lp = 0.0;
+    private double mufflerLp = 0.0;
+    private double bodyResonator = 0.0;
+    private double hpIn = 0.0;
+    private double hpOut = 0.0;
 
+    private final Random rng = new Random();
     private EngineListener engineListener;
 
     public V8SoundEngine() {
-        for (int i = 0; i < 8; i++) {
-            cylinderJitter[i] = 1.0 + (rng.nextDouble() - 0.5) * 0.08;
-        }
     }
 
     public void setEngineListener(EngineListener listener) {
@@ -125,7 +111,6 @@ public class V8SoundEngine {
     public void setInputs(float speedKmH, float pedalPerc, float torqueNm) {
         this.targetSpeedKmH = Math.max(0f, speedKmH);
         this.targetPedalPerc = Math.max(0f, Math.min(100f, pedalPerc));
-        // signed torque: negative = regen braking, positive = motor pull
         this.targetTorqueNm = Math.max(-250f, Math.min(450f, torqueNm));
     }
 
@@ -207,60 +192,39 @@ public class V8SoundEngine {
         while (isRunning) {
             updateTransmission();
 
-            float throttle = currentThrottle;
             float rpm = currentRpm;
-            float torque = currentTorqueNm;
             float load = effectiveLoad;
+            float torque = currentTorqueNm;
 
-            // Crankshaft rotation speed in radians per sample
+            // Angular speed of crankshaft in radians per sample
             double crankRadPerSample = (rpm / 60.0) * (2.0 * Math.PI) / SAMPLE_RATE;
 
-            // Acoustic overall volume target (elevated baseline for strong presence)
+            // Sub-bass reinforcement oscillator (tuned to engine firing cadence)
+            // 4 cylinder fires per rev = 4th order harmonic of crank revs
+            double firingOrderRadPerSample = crankRadPerSample * 2.0;
+
+            // Elevated baseline target volume for strong cabin presence
             float targetVolume;
             if (isMuted) {
                 targetVolume = 0.0f;
             } else {
-                // Base idle/cruise volume + load enhancement
-                targetVolume = 0.85f + (load * 0.45f);
+                targetVolume = 0.85f + (load * 0.40f);
                 if (torque < -10f) {
-                    // Heavy regen deceleration volume boost
-                    float regenFactor = Math.min(1.0f, -torque / 140.0f);
-                    targetVolume = Math.max(targetVolume, 0.88f + regenFactor * 0.40f);
+                    // Pronounced engine braking compression sound during regen
+                    targetVolume = Math.max(targetVolume, 0.90f);
                 }
             }
 
-            // Helmholtz induction roar frequency (~90 Hz - 220 Hz)
-            double intakeFreq = 85.0 + (rpm * 0.022);
-            double intakeInc = (2.0 * Math.PI * intakeFreq) / SAMPLE_RATE;
-
-            // 2nd-order muffler chamber resonator coefficients (~140 Hz body resonance)
-            double resFreq = 135.0 + (rpm * 0.015);
-            double w0 = 2.0 * Math.PI * resFreq / SAMPLE_RATE;
-            double cosW = Math.cos(w0);
-            double sinW = Math.sin(w0);
-            double alpha = sinW / (2.0 * 2.2); // Q factor ~2.2 for deep throaty resonance
-            double b0 = alpha;
-            double a0 = 1.0 + alpha;
-            double a1 = -2.0 * cosW;
-            double a2 = 1.0 - alpha;
-            double normB0 = b0 / a0;
-            double normA1 = a1 / a0;
-            double normA2 = a2 / a0;
-
             for (int i = 0; i < BUFFER_SIZE; i++) {
-                // Advance crank angle across 720 degree cycle
+                // Advance crank phase across 720 degree cycle (4*PI)
                 crankPhase += crankRadPerSample;
                 if (crankPhase >= CYCLE_RADIANS) {
                     crankPhase -= CYCLE_RADIANS;
-                    // Periodic micro-jitter update per engine cycle to keep sound organic
-                    for (int j = 0; j < 8; j++) {
-                        cylinderJitter[j] = 1.0 + (rng.nextDouble() - 0.5) * 0.10;
-                    }
                 }
 
-                intakePhase += intakeInc;
-                if (intakePhase >= 2.0 * Math.PI) {
-                    intakePhase -= 2.0 * Math.PI;
+                subBassPhase += firingOrderRadPerSample;
+                if (subBassPhase >= 2.0 * Math.PI) {
+                    subBassPhase -= 2.0 * Math.PI;
                 }
 
                 smoothedVolume += (targetVolume - smoothedVolume) * 0.005f;
@@ -271,96 +235,78 @@ public class V8SoundEngine {
                     continue;
                 }
 
-                // 1. Synthesize individual cylinder exhaust blowdown pressures
+                // 1. Synthesize smooth acoustic pressure waves for each cylinder
                 double bank1Raw = 0.0;
                 double bank2Raw = 0.0;
 
                 // Bank 1 (Left): Cylinders 1, 3, 5, 7
-                bank1Raw += evaluateCylinderPulse(crankPhase, CYLINDER_FIRING_ANGLES[0], cylinderJitter[0], load);
-                bank1Raw += evaluateCylinderPulse(crankPhase, CYLINDER_FIRING_ANGLES[2], cylinderJitter[2], load);
-                bank1Raw += evaluateCylinderPulse(crankPhase, CYLINDER_FIRING_ANGLES[4], cylinderJitter[4], load);
-                bank1Raw += evaluateCylinderPulse(crankPhase, CYLINDER_FIRING_ANGLES[6], cylinderJitter[6], load);
+                bank1Raw += evaluateSmoothPulse(crankPhase, CYLINDER_FIRING_ANGLES[0], load);
+                bank1Raw += evaluateSmoothPulse(crankPhase, CYLINDER_FIRING_ANGLES[2], load);
+                bank1Raw += evaluateSmoothPulse(crankPhase, CYLINDER_FIRING_ANGLES[4], load);
+                bank1Raw += evaluateSmoothPulse(crankPhase, CYLINDER_FIRING_ANGLES[6], load);
 
                 // Bank 2 (Right): Cylinders 8, 4, 6, 2
-                bank2Raw += evaluateCylinderPulse(crankPhase, CYLINDER_FIRING_ANGLES[7], cylinderJitter[7], load);
-                bank2Raw += evaluateCylinderPulse(crankPhase, CYLINDER_FIRING_ANGLES[3], cylinderJitter[3], load);
-                bank2Raw += evaluateCylinderPulse(crankPhase, CYLINDER_FIRING_ANGLES[5], cylinderJitter[5], load);
-                bank2Raw += evaluateCylinderPulse(crankPhase, CYLINDER_FIRING_ANGLES[1], cylinderJitter[1], load);
+                bank2Raw += evaluateSmoothPulse(crankPhase, CYLINDER_FIRING_ANGLES[7], load);
+                bank2Raw += evaluateSmoothPulse(crankPhase, CYLINDER_FIRING_ANGLES[3], load);
+                bank2Raw += evaluateSmoothPulse(crankPhase, CYLINDER_FIRING_ANGLES[5], load);
+                bank2Raw += evaluateSmoothPulse(crankPhase, CYLINDER_FIRING_ANGLES[1], load);
 
-                // Deceleration overrun crackles and pops
-                if (overrunTimer > 0.01f && rng.nextFloat() < 0.0028f) {
-                    double popIntensity = 1.4 + rng.nextDouble() * 1.6;
-                    if (rng.nextBoolean()) {
-                        bank1Raw += popIntensity;
-                    } else {
-                        bank2Raw += popIntensity;
-                    }
-                }
+                // 2. Primary header tube acoustic propagation delay
+                bank1Delay[delayIdx] = bank1Raw;
+                bank2Delay[delayIdx] = bank2Raw;
+                delayIdx = (delayIdx + 1) % DELAY_SAMPLES;
+                double bank1Delayed = bank1Delay[delayIdx];
+                double bank2Delayed = bank2Delay[delayIdx];
 
-                // 2. Header tube delay lines (propagation travel to collector)
-                bank1DelayLine[delayWriteIdx] = bank1Raw;
-                bank2DelayLine[delayWriteIdx] = bank2Raw;
-                delayWriteIdx = (delayWriteIdx + 1) % HEADER_DELAY_SAMPLES;
-                double bank1Delayed = bank1DelayLine[delayWriteIdx];
-                double bank2Delayed = bank2DelayLine[delayWriteIdx];
+                // 3. Exhaust manifold acoustic low-pass filter (rolls off harsh highs above 950 Hz)
+                bank1Lp += (bank1Delayed - bank1Lp) * 0.14;
+                bank2Lp += (bank2Delayed - bank2Lp) * 0.14;
 
-                // 3. Acoustic Differentiation (dP/dt finite-difference)
-                // engine-sim discovery: far-field radiated sound is proportional to time derivative of pressure
-                double bank1Deriv = (bank1Delayed - prevBank1) * 3.8;
-                double bank2Deriv = (bank2Delayed - prevBank2) * 3.8;
-                prevBank1 = bank1Delayed;
-                prevBank2 = bank2Delayed;
+                // 4. X-Pipe Crossover (75% direct bank + 25% crossover balance)
+                // Preserves the distinct asymmetric crossplane rumble without cancelling
+                double leftPipe = bank1Lp * 0.75 + bank2Lp * 0.25;
+                double rightPipe = bank2Lp * 0.75 + bank1Lp * 0.25;
+                double exhaustMix = (leftPipe + rightPipe) * 0.50;
 
-                // 4. Crossplane X-Pipe Crossover (70% direct + 30% opposing bank crossover)
-                double exhaustLeft = bank1Delayed + (bank1Deriv * 0.45) + (bank2Delayed * 0.30);
-                double exhaustRight = bank2Delayed + (bank2Deriv * 0.45) + (bank1Delayed * 0.30);
-                double combinedExhaust = (exhaustLeft + exhaustRight) * 0.55;
+                // 5. Deep Muffler Cavity Resonator (creates that chest-thumping muscle-car bass)
+                bodyResonator += (exhaustMix - bodyResonator) * 0.035;
+                mufflerLp += (exhaustMix - mufflerLp) * 0.09;
+                double deepTone = (exhaustMix * 0.70) + (bodyResonator * 0.60) + (mufflerLp * 0.40);
 
-                // 5. Tuned Muffler Resonant Cavity (adds deep low-end chest thump)
-                double resonatorSample = (normB0 * combinedExhaust) - (normA1 * resonatorY1) - (normA2 * resonatorY2);
-                resonatorY2 = resonatorY1;
-                resonatorY1 = resonatorSample;
+                // 6. Sub-bass acoustic foundation (gives authentic low V8 body at 50-120 Hz)
+                double subBass = Math.sin(subBassPhase) * (0.35 + load * 0.25);
+                double compositeSignal = deepTone + subBass;
 
-                double acousticMix = combinedExhaust + (resonatorSample * 1.35);
+                // 7. Subsonic High-Pass Filter (~22 Hz cutoff)
+                // Removes inaudible DC offset while retaining 100% of audible low bass
+                double hpAlpha = 0.9965;
+                hpOut = hpAlpha * (hpOut + compositeSignal - hpIn);
+                hpIn = compositeSignal;
+                double cleanSignal = hpOut;
 
-                // 6. Intake Roar on throttle / high load
-                if (load > 0.08f) {
-                    float intakeScale = (load - 0.08f) / 0.92f;
-                    double intakeRoar = Math.sin(intakePhase) * (intakeScale * 0.38)
-                            + Math.sin(intakePhase * 0.5) * (intakeScale * 0.22);
-                    acousticMix += intakeRoar;
-                }
+                // 8. Warm Tube-Style Saturation (Deep Growl under load)
+                // Produces rich 2nd/3rd harmonics without high-pitched buzz
+                double drive = 1.35 + (load * 1.65);
+                double driven = cleanSignal * drive;
+                double warmedSignal = driven / (1.0 + Math.abs(driven) * 0.38);
 
-                // 7. Subsonic High-Pass Filter (~30 Hz cutoff)
-                // Eliminates DC offset and ultra-low subsonic cone oscillation
-                double hpAlpha = 0.9955;
-                highPassOut = hpAlpha * (highPassOut + acousticMix - highPassIn);
-                highPassIn = acousticMix;
-                double cleanAcoustic = highPassOut;
+                // 9. Full Dynamic Range Scaling (Peaking loud & clean near +/- 29,000)
+                double masterGain = warmedSignal * smoothedVolume * smoothedShiftCut * masterVolume * 29500.0;
 
-                // 8. Output Amplifier with Warm Drive & Transparent Limiter
-                // Drive factor brings quiet passages up while preserving transient punch
-                double drive = 1.55 + (load * 0.85);
-                double driven = cleanAcoustic * drive;
-
-                // Master gain tuned to fully exploit 16-bit PCM (peaking near +/- 30,000)
-                double outputGain = driven * smoothedVolume * smoothedShiftCut * masterVolume * 34000.0;
-
-                // Smooth soft-knee saturation curve (never harsh-clips or farts)
-                double saturatedSample;
-                if (outputGain > 26000.0) {
-                    saturatedSample = 26000.0 + 5000.0 * Math.tanh((outputGain - 26000.0) / 5000.0);
-                } else if (outputGain < -26000.0) {
-                    saturatedSample = -26000.0 + 5000.0 * Math.tanh((outputGain + 26000.0) / 5000.0);
+                // Soft-knee safety limiter
+                double finalSample;
+                if (masterGain > 27000.0) {
+                    finalSample = 27000.0 + 3500.0 * Math.tanh((masterGain - 27000.0) / 3500.0);
+                } else if (masterGain < -27000.0) {
+                    finalSample = -27000.0 + 3500.0 * Math.tanh((masterGain + 27000.0) / 3500.0);
                 } else {
-                    saturatedSample = outputGain;
+                    finalSample = masterGain;
                 }
 
-                // Hard safety clamp
-                if (saturatedSample > 31500.0) saturatedSample = 31500.0;
-                if (saturatedSample < -31500.0) saturatedSample = -31500.0;
+                if (finalSample > 31500.0) finalSample = 31500.0;
+                if (finalSample < -31500.0) finalSample = -31500.0;
 
-                buffer[i] = (short) saturatedSample;
+                buffer[i] = (short) finalSample;
             }
 
             if (audioTrack != null && isRunning) {
@@ -370,111 +316,98 @@ public class V8SoundEngine {
     }
 
     /**
-     * Evaluates cylinder blowdown pressure wave with physical asymmetric curve:
-     * rapid sonic rise when exhaust valve cracks open, followed by exponential expansion decay.
+     * Evaluates a smooth acoustic blowdown pressure lobe.
+     * Uses a raised-cosine (sin^2) shape over ~170 degrees of crank rotation,
+     * ensuring zero derivative at wave boundaries (completely eliminates high-pitched buzz).
      */
-    private double evaluateCylinderPulse(double currentCrankAngle, double firingAngle, double jitter, float load) {
+    private double evaluateSmoothPulse(double currentCrankAngle, double firingAngle, float load) {
         double delta = currentCrankAngle - firingAngle;
         if (delta < 0.0) delta += CYCLE_RADIANS;
         if (delta >= CYCLE_RADIANS) delta -= CYCLE_RADIANS;
 
-        // Exhaust valve opening duration: ~135 degrees of crank rotation
-        double duration = 135.0 * Math.PI / 180.0;
+        // Exhaust blowdown duration: 170 degrees of crank rotation
+        double duration = 170.0 * Math.PI / 180.0;
         if (delta < duration) {
             double x = delta / duration;
-            // Asymmetric pulse: fast rise, exponential decay
-            double pulseShape = Math.sin(Math.pow(x, 0.45) * Math.PI) * Math.exp(-2.6 * x);
-            double amplitude = (0.65 + load * 0.75) * jitter;
-            return pulseShape * amplitude;
+            // Raised cosine pulse (perfectly smooth, pure low-end energy)
+            double s = Math.sin(x * Math.PI);
+            double pulse = s * s * Math.exp(-0.85 * x);
+            double amplitude = 0.70 + (load * 0.75);
+            return pulse * amplitude;
         }
         return 0.0;
     }
 
     /**
-     * Virtual transmission and engine load state machine.
-     * Computes virtual gear, mechanical RPM, kickdown, and overrun burble.
+     * Virtual transmission and load state machine.
+     * Coordinates gear ratios, idle lope, kickdown, and engine load.
      */
     private void updateTransmission() {
         float speed = targetSpeedKmH;
         float throttle = targetPedalPerc / 100.0f;
         float torque = targetTorqueNm;
 
-        // Responsive smoothing for inputs
-        currentThrottle += (throttle - currentThrottle) * 0.22f;
-        currentTorqueNm += (torque - currentTorqueNm) * 0.24f;
+        // Smooth inputs
+        currentThrottle += (throttle - currentThrottle) * 0.20f;
+        currentTorqueNm += (torque - currentTorqueNm) * 0.22f;
         currentSpeedKmH += (speed - currentSpeedKmH) * 0.20f;
         downshiftBlip *= 0.84f;
-        targetShiftCut += (1.0f - targetShiftCut) * 0.18f;
+        targetShiftCut += (1.0f - targetShiftCut) * 0.16f;
 
-        // Compute Effective Engine Load:
-        // Blends driver pedal demand with physical EV motor torque.
-        // Resolves the high-speed field-weakening drop-off so sound remains loud & aggressive.
-        float torqueNorm = (currentTorqueNm > 0f) ? Math.min(1.0f, currentTorqueNm / 200.0f) : 0f;
-        effectiveLoad = Math.max(currentThrottle, (currentThrottle * 0.60f + torqueNorm * 0.40f));
+        // Effective Engine Load: blends pedal demand with motor pull
+        float torqueNorm = (currentTorqueNm > 0f) ? Math.min(1.0f, currentTorqueNm / 180.0f) : 0f;
+        effectiveLoad = Math.max(currentThrottle, (currentThrottle * 0.55f + torqueNorm * 0.45f));
 
-        // Deceleration overrun detector: rapid throttle drop with vehicle moving or in regen
-        float throttleDrop = prevThrottle - currentThrottle;
-        if (throttleDrop > 0.18f && currentSpeedKmH > 15f && currentThrottle < 0.10f) {
-            overrunTimer = 1.4f; // 1.4 seconds of burble and crackles
-        }
-        if (overrunTimer > 0f) {
-            overrunTimer -= 0.02f; // decay per frame update
-        }
-        prevThrottle = currentThrottle;
-
-        // Idle cam lope oscillators
-        lopePhase1 += 0.14;
-        lopePhase2 += 0.08;
-        if (lopePhase1 > 2.0 * Math.PI * 50.0) lopePhase1 -= 2.0 * Math.PI * 50.0;
-        if (lopePhase2 > 2.0 * Math.PI * 50.0) lopePhase2 -= 2.0 * Math.PI * 50.0;
+        // Idle cam lope oscillator (creates authentic uneven 800 RPM idle rumble)
+        lopePhase += 0.12;
+        if (lopePhase > 2.0 * Math.PI * 100.0) lopePhase -= 2.0 * Math.PI * 100.0;
 
         if (currentSpeedKmH < 2.5f && currentThrottle < 0.05f) {
             // Stationary Idle: Natural crossplane lope
             currentGear = 0;
-            float lopeOffset = (float) (Math.sin(lopePhase1) * 28.0 + Math.cos(lopePhase2) * 18.0);
+            float lopeOffset = (float) (Math.sin(lopePhase) * 25.0 + Math.cos(lopePhase * 0.65) * 18.0);
             float targetIdle = BASE_IDLE_RPM + lopeOffset;
-            currentRpm += (targetIdle - currentRpm) * 0.15f;
+            currentRpm += (targetIdle - currentRpm) * 0.14f;
         } else if (currentSpeedKmH < 3.5f && currentThrottle >= 0.05f) {
-            // Stationary Neutral Revving: Instant rev response
+            // Stationary Neutral Revving: Instantaneous rev response
             currentGear = 0;
-            float revTarget = BASE_IDLE_RPM + (currentThrottle * (REDLINE_RPM - BASE_IDLE_RPM) * 0.94f);
-            currentRpm += (revTarget - currentRpm) * 0.22f;
+            float revTarget = BASE_IDLE_RPM + (currentThrottle * (REDLINE_RPM - BASE_IDLE_RPM) * 0.92f);
+            currentRpm += (revTarget - currentRpm) * 0.20f;
         } else {
-            // Moving: Mechanically locked gear RPM with torque-responsive shift points
+            // Moving: Mechanically geared RPM
             float wheelRpm = (currentSpeedKmH * 1000f) / (WHEEL_CIRCUMFERENCE_M * 60f);
             if (currentGear == 0) currentGear = 1;
 
-            // Dynamic shift schedule based on effective load
-            // Under heavy wheel torque or high pedal, gears are held longer
-            float upshiftRpm = 2200f + (effectiveLoad * 4300f);
-            float downshiftRpm = 1350f + (effectiveLoad * 1800f);
+            // Progressive shift points based on effective load
+            float upshiftRpm = 2100f + (effectiveLoad * 4200f);
+            float downshiftRpm = 1300f + (effectiveLoad * 1700f);
 
-            // Kickdown: sudden pedal stomp or high wheel torque downshifts for passing power
-            boolean isKickdown = (currentThrottle > 0.68f || (currentTorqueNm > 170f && currentSpeedKmH > 15f));
+            // Kickdown on sudden throttle or strong wheel torque
+            boolean isKickdown = (currentThrottle > 0.68f || (currentTorqueNm > 160f && currentSpeedKmH > 15f));
             if (isKickdown && currentGear > 2) {
                 float potentialLowerRpm = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 2];
                 if (potentialLowerRpm < 5800f) {
                     currentGear--;
-                    downshiftBlip = 500f;
+                    downshiftBlip = 480f;
                 }
             }
 
             float rawGearRpm = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 1];
 
-            // Upshift / Downshift evaluation
+            // Shift evaluation with subtle transmission acoustic dip
             if (rawGearRpm > upshiftRpm && currentGear < 6) {
                 currentGear++;
-                targetShiftCut = 0.82f; // Simulated transmission shift cut
+                targetShiftCut = 0.82f;
             } else if (rawGearRpm < downshiftRpm && currentGear > 1 && !isKickdown) {
                 currentGear--;
-                downshiftBlip = 300f;
+                downshiftBlip = 280f;
             }
 
             float lockedRpm = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 1] + downshiftBlip;
             if (lockedRpm < BASE_IDLE_RPM) lockedRpm = BASE_IDLE_RPM;
             if (lockedRpm > REDLINE_RPM) lockedRpm = REDLINE_RPM;
 
-            currentRpm += (lockedRpm - currentRpm) * 0.26f;
+            currentRpm += (lockedRpm - currentRpm) * 0.24f;
         }
 
         if (engineListener != null) {

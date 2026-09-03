@@ -58,10 +58,19 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
 
     private RpmGaugeView gaugeRpm;
     private Button btnSoundToggle;
+    private Button btnTestDrive;
     private V8SoundEngine soundEngine;
     private SeekBar sbEngineVolume;
     private TextView tvVolumeVal;
     private static final String PREF_KEY_V8_VOLUME = "v8_master_volume";
+
+    // Test simulation state (10% throttle)
+    private boolean isTestRunning = false;
+    private final android.os.Handler testHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable testRunnable;
+    private float simDriveSpeed = 0f;
+    private float simDrivePedal = 0f;
+    private float simDriveTorque = 0f;
 
     private View cardSimulator;
     private SeekBar sbSimSpeed;
@@ -94,6 +103,9 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
 
         gaugeRpm = findViewById(R.id.gauge_rpm);
         btnSoundToggle = findViewById(R.id.btn_sound_toggle);
+        btnTestDrive = findViewById(R.id.btn_test_drive);
+
+        initTestDriveButton();
 
         // V8 Sound Generator
         soundEngine = new V8SoundEngine();
@@ -220,9 +232,81 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
         }
     }
 
+    private void initTestDriveButton() {
+        if (btnTestDrive == null) return;
+
+        testRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (!isTestRunning) return;
+
+                // Smoothly bring pedal to 10%
+                simDrivePedal += (10.0f - simDrivePedal) * 0.08f;
+
+                // Gradually accelerate up to ~65 km/h
+                if (simDriveSpeed < 65.0f) {
+                    simDriveSpeed += 0.22f; // ~4.4 km/h per second
+                }
+
+                // Realistic EV motor torque under 10% pedal:
+                // Starts strong at launch (~75 Nm), settles to ~35 Nm at cruising speed
+                float targetTorque = 75.0f - (simDriveSpeed / 65.0f * 38.0f);
+                simDriveTorque += (targetTorque - simDriveTorque) * 0.10f;
+
+                updateSpeed(simDriveSpeed);
+                updatePedal(simDrivePedal);
+                updateTorque(simDriveTorque);
+
+                if (soundEngine != null) {
+                    soundEngine.setInputs(simDriveSpeed, simDrivePedal, simDriveTorque);
+                }
+
+                // 50 ms loop (20 updates/sec)
+                testHandler.postDelayed(this, 50);
+            }
+        };
+
+        btnTestDrive.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (!isTestRunning) {
+                    // Start Test Drive
+                    isTestRunning = true;
+                    simDriveSpeed = 0f;
+                    simDrivePedal = 0f;
+                    simDriveTorque = 0f;
+                    btnTestDrive.setText("⏹ STOP TEST");
+                    btnTestDrive.setTextColor(0xFFFF5252); // Red when active
+                    testHandler.post(testRunnable);
+                } else {
+                    // Stop Test Drive
+                    stopTestDrive();
+                }
+            }
+        });
+    }
+
+    private void stopTestDrive() {
+        isTestRunning = false;
+        testHandler.removeCallbacks(testRunnable);
+        if (btnTestDrive != null) {
+            btnTestDrive.setText("▶ TEST (10%)");
+            btnTestDrive.setTextColor(0xFFFFD600); // Yellow when idle
+        }
+        updatePedal(0f);
+        updateSpeed(0f);
+        updateTorque(0f);
+        if (soundEngine != null) {
+            soundEngine.setInputs(0f, 0f, 0f);
+        }
+    }
+
     @Override
     protected void onPause() {
         super.onPause();
+        if (isTestRunning) {
+            stopTestDrive();
+        }
         if (soundEngine != null) {
             soundEngine.stop();
         }
@@ -231,6 +315,9 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (isTestRunning) {
+            stopTestDrive();
+        }
         Field pedalField = MainActivity.fields.getBySID(SID_Pedal);
         if (pedalField != null) {
             pedalField.removeListener(this);
@@ -276,7 +363,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
 
     @Override
     public void onFieldUpdateEvent(final Field field) {
-        if (field == null) return;
+        if (field == null || isTestRunning) return;
 
         runOnUiThread(new Runnable() {
             @Override

@@ -38,6 +38,20 @@
                 android:textStyle="bold" />
 
             <Button
+                android:id="@+id/btn_test_drive"
+                android:layout_width="wrap_content"
+                android:layout_height="34dp"
+                android:background="#1E283D"
+                android:text="▶ TEST (10%)"
+                android:textColor="#FFD600"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:layout_marginEnd="8dp"
+                android:layout_marginRight="8dp" />
+
+            <Button
                 android:id="@+id/btn_sound_toggle"
                 android:layout_width="wrap_content"
                 android:layout_height="34dp"
