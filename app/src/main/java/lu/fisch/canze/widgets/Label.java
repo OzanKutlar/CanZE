@@ -66,55 +66,60 @@ public class Label extends Drawable {
 
     @Override
     public void draw(Graphics g) {
-        // modern dark card background
-        g.setColor(getBackground());
-        g.fillRect(x, y, width, height);
+        // Draw sleek modern card container window
+        drawModernWindowCard(g, 4);
 
-        // subtle card border
-        g.setColor(new Color(38, 51, 70));
-        g.drawRect(x, y, width, height);
+        int inset = 6;
+        // Header: Category Title with glowing dot
+        int titleX = x + inset + 14;
+        int titleY = y + inset + 22;
+        g.setTextSize(11);
+        Color dotCol = isFieldSkipped() ? new Color(204, 0, 0) : new Color(0, 230, 118);
+        g.setColor(dotCol);
+        g.fillRoundRect(titleX, titleY - 8, 8, 8, 4, 4);
 
-        // draw the value
-        if(showValue) {
-            if(field !=null)
-            {
-                // get text
-                String text = String.format("%." + String.valueOf(field.getDecimals()) + "f", field.getValue()).trim();
+        g.setColor(new Color(138, 153, 173));
+        String cleanTitle = (title != null && !title.isEmpty()) ? title.toUpperCase() : "STATE OF HEALTH";
+        g.drawString(cleanTitle, titleX + 14, titleY);
 
-                int th, tw;
-                //if(textSize==-1) {
-                    // init
-                    textSize = 10;
-                    // find out what the biggest text size could be
-                    do {
-                        g.setTextSize(textSize);
-                        tw = g.stringWidth(text);
-                        th = g.stringHeight(text);
-                        textSize++;
-                    } while (th < getHeight() * 0.9 && tw < getWidth() * 0.9);
+        // Hero Big Value in center
+        if (showValue && field != null) {
+            double val = field.getValue();
+            String numStr = Double.isNaN(val) ? "--" : String.format(java.util.Locale.US, "%." + field.getDecimals() + "f", val);
+            String unitStr = "%";
 
-                    textSize--;
-                //}
-                g.setTextSize(textSize);
-                tw = g.stringWidth(text);
-                th = g.stringHeight(text);
+            // Dynamic modern typography fitting
+            g.setTextSize(Math.min(42, (int) (height * 0.38)));
+            int numW = g.stringWidth(numStr);
+            int numH = g.stringHeight(numStr);
 
-                int tx = getX()+getWidth()/2-tw/2;
-                int ty = getY()+getHeight()/2+th/2;
-                // Glowing neon green for healthy state
-                g.setColor(isFieldSkipped() ? new Color(204, 0, 0) : new Color(0, 230, 118));
-                g.drawString(text, tx, ty);
-            }
-        }
+            int cx = x + width / 2;
+            int cy = y + height / 2 + 4;
 
-        // draw the title
-        if(title!=null && !title.equals(""))
-        {
-            g.setColor(getTitleColor());
+            Color heroColor = isFieldSkipped() ? new Color(204, 0, 0) : (val < 75.0 ? new Color(255, 179, 0) : new Color(0, 230, 118));
+            g.setColor(heroColor);
+            g.drawString(numStr, cx - numW / 2 - 10, cy + numH / 2);
+
             g.setTextSize(16);
-            int tx = getX()+8;
-            int ty = getY()+g.stringHeight(title)+8;
-            g.drawString(title,tx,ty);
+            g.setColor(new Color(138, 153, 173));
+            g.drawString(unitStr, cx + numW / 2 - 4, cy + numH / 2);
+
+            // Modern status pill at bottom center
+            String statusText = isFieldSkipped() ? "SKIPPED" : (val >= 90.0 ? "EXCELLENT" : (val >= 80.0 ? "GOOD" : "CHECK PACK"));
+            g.setTextSize(9);
+            int sW = g.stringWidth(statusText);
+            int pW = sW + 16;
+            int pH = 16;
+            int pX = cx - pW / 2;
+            int pY = y + height - inset - 22;
+
+            g.setColor(new Color(24, 33, 49));
+            g.fillRoundRect(pX, pY, pW, pH, 8, 8);
+            g.setColor(new Color(38, 51, 74));
+            g.drawRoundRect(pX, pY, pW, pH, 8, 8);
+
+            g.setColor(heroColor);
+            g.drawString(statusText, pX + 8, pY + 11);
         }
     }
 
