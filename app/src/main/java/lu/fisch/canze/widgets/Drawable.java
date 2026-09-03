@@ -268,7 +268,7 @@ public abstract class Drawable implements FieldListener {
     /** colour used to mark a value that is no longer being requested */
     private static final Color SKIPPED_COLOR = new Color(204, 0, 0);
 
-    private boolean isFieldSkipped() {
+    protected boolean isFieldSkipped() {
         return field != null && field.isSkipped();
     }
 
