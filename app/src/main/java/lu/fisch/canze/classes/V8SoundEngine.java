@@ -85,6 +85,15 @@ public class V8SoundEngine {
     private float targetShiftCut = 1.0f;
     private float smoothedShiftCut = 1.0f;
 
+    // Organic wander & micro-noise state
+    private float pedalWanderTarget = 0f;
+    private float pedalWanderSmoothed = 0f;
+    private float rpmWanderTarget = 0f;
+    private float rpmWanderSmoothed = 0f;
+    private double cruiseWanderPhase1 = 0.0;
+    private double cruiseWanderPhase2 = 0.0;
+    private double crankCycleFlutter = 1.0;
+
     // Oscillators
     private double crankPhase = 0.0;
     private double lopePhase = 0.0;
@@ -197,8 +206,8 @@ public class V8SoundEngine {
             float load = effectiveLoad;
             float torque = currentTorqueNm;
 
-            // Angular speed of crankshaft in radians per sample
-            double crankRadPerSample = (rpm / 60.0) * (2.0 * Math.PI) / SAMPLE_RATE;
+            // Angular speed of crankshaft in radians per sample with organic cycle flutter
+            double crankRadPerSample = ((rpm * crankCycleFlutter) / 60.0) * (2.0 * Math.PI) / SAMPLE_RATE;
 
             // Sub-bass reinforcement oscillator (tuned to engine firing cadence)
             // 4 cylinder fires per rev = 4th order harmonic of crank revs
@@ -223,6 +232,8 @@ public class V8SoundEngine {
                 crankPhase += crankRadPerSample;
                 if (crankPhase >= CYCLE_RADIANS) {
                     crankPhase -= CYCLE_RADIANS;
+                    // Cylinder combustion variance: minute micro-flutter per 720° engine cycle (±0.35%)
+                    crankCycleFlutter = 1.0 + (rng.nextDouble() - 0.5) * 0.007;
                 }
 
                 subBassPhase += firingOrderRadPerSample;
@@ -345,15 +356,22 @@ public class V8SoundEngine {
 
     /**
      * Virtual transmission and load state machine.
-     * Coordinates gear ratios, idle lope, kickdown, and engine load.
+     * Coordinates gear ratios, torque converter slip, organic RPM wander, and idle lope.
      */
     private void updateTransmission() {
         float speed = targetSpeedKmH;
-        float throttle = targetPedalPerc / 100.0f;
+        float rawThrottle = targetPedalPerc / 100.0f;
         float torque = targetTorqueNm;
 
+        // 1. Organic driver foot / throttle plate micro-tremor (±0.6% wander)
+        if (rng.nextFloat() < 0.15f) {
+            pedalWanderTarget = (rng.nextFloat() - 0.5f) * 0.012f;
+        }
+        pedalWanderSmoothed += (pedalWanderTarget - pedalWanderSmoothed) * 0.08f;
+        float throttleWithTremor = Math.max(0.0f, Math.min(1.0f, rawThrottle + (rawThrottle > 0.02f ? pedalWanderSmoothed : 0.0f)));
+
         // Smooth inputs
-        currentThrottle += (throttle - currentThrottle) * 0.20f;
+        currentThrottle += (throttleWithTremor - currentThrottle) * 0.20f;
         currentTorqueNm += (torque - currentTorqueNm) * 0.22f;
         currentSpeedKmH += (speed - currentSpeedKmH) * 0.20f;
         downshiftBlip *= 0.84f;
@@ -363,9 +381,15 @@ public class V8SoundEngine {
         float torqueNorm = (currentTorqueNm > 0f) ? Math.min(1.0f, currentTorqueNm / 180.0f) : 0f;
         effectiveLoad = Math.max(currentThrottle, (currentThrottle * 0.55f + torqueNorm * 0.45f));
 
-        // Idle cam lope oscillator (creates authentic uneven 800 RPM idle rumble)
+        // Advance idle cam lope oscillator
         lopePhase += 0.12;
         if (lopePhase > 2.0 * Math.PI * 100.0) lopePhase -= 2.0 * Math.PI * 100.0;
+
+        // Advance dual cruising organic breathe oscillators (0.65 Hz & 1.35 Hz)
+        cruiseWanderPhase1 += 0.085;
+        cruiseWanderPhase2 += 0.176;
+        if (cruiseWanderPhase1 > 2.0 * Math.PI * 100.0) cruiseWanderPhase1 -= 2.0 * Math.PI * 100.0;
+        if (cruiseWanderPhase2 > 2.0 * Math.PI * 100.0) cruiseWanderPhase2 -= 2.0 * Math.PI * 100.0;
 
         if (currentSpeedKmH < 2.5f && currentThrottle < 0.05f) {
             // Stationary Idle: Natural crossplane lope
@@ -374,12 +398,13 @@ public class V8SoundEngine {
             float targetIdle = BASE_IDLE_RPM + lopeOffset;
             currentRpm += (targetIdle - currentRpm) * 0.14f;
         } else if (currentSpeedKmH < 3.5f && currentThrottle >= 0.05f) {
-            // Stationary Neutral Revving: Instantaneous rev response
+            // Stationary Neutral Revving: Instantaneous rev response with subtle lope flutter
             currentGear = 0;
-            float revTarget = BASE_IDLE_RPM + (currentThrottle * (REDLINE_RPM - BASE_IDLE_RPM) * 0.92f);
+            float lopeFlutter = (float) (Math.sin(cruiseWanderPhase1) * 22.0);
+            float revTarget = BASE_IDLE_RPM + (currentThrottle * (REDLINE_RPM - BASE_IDLE_RPM) * 0.92f) + lopeFlutter;
             currentRpm += (revTarget - currentRpm) * 0.20f;
         } else {
-            // Moving: Mechanically geared RPM
+            // Moving: Mechanically geared RPM with torque converter fluid coupling
             float wheelRpm = (currentSpeedKmH * 1000f) / (WHEEL_CIRCUMFERENCE_M * 60f);
             if (currentGear == 0) currentGear = 1;
 
@@ -408,11 +433,27 @@ public class V8SoundEngine {
                 downshiftBlip = 280f;
             }
 
-            float lockedRpm = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 1] + downshiftBlip;
-            if (lockedRpm < BASE_IDLE_RPM) lockedRpm = BASE_IDLE_RPM;
-            if (lockedRpm > REDLINE_RPM) lockedRpm = REDLINE_RPM;
+            // 2. Torque converter slip: fluid coupling slips 1.8% to 4.2% based on engine load
+            float converterSlip = 1.018f + (effectiveLoad * 0.024f);
 
-            currentRpm += (lockedRpm - currentRpm) * 0.24f;
+            // 3. Low-frequency cruising RPM breathe (±18 to ±32 RPM wander)
+            // Eliminates the static mathematical drone during steady cruise control
+            if (rng.nextFloat() < 0.12f) {
+                rpmWanderTarget = (rng.nextFloat() - 0.5f) * 26.0f;
+            }
+            rpmWanderSmoothed += (rpmWanderTarget - rpmWanderSmoothed) * 0.06f;
+
+            float harmonicBreathe = (float) (Math.sin(cruiseWanderPhase1) * 14.0 + Math.cos(cruiseWanderPhase2) * 8.0);
+            float organicRpmOffset = harmonicBreathe + rpmWanderSmoothed;
+
+            float targetDynamicRpm = (wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 1] * converterSlip)
+                    + downshiftBlip
+                    + organicRpmOffset;
+
+            if (targetDynamicRpm < BASE_IDLE_RPM) targetDynamicRpm = BASE_IDLE_RPM;
+            if (targetDynamicRpm > REDLINE_RPM) targetDynamicRpm = REDLINE_RPM;
+
+            currentRpm += (targetDynamicRpm - currentRpm) * 0.22f;
         }
 
         if (engineListener != null) {
