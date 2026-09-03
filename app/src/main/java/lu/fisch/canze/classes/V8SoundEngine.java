@@ -61,9 +61,9 @@ public class V8SoundEngine {
     // Idle cam lope oscillator phases
     private double lopePhase1 = 0.0;
     private double lopePhase2 = 0.0;
+    private double regenModPhase = 0.0;
 
     private EngineListener engineListener;
-    private final Random random = new Random();
 
     public V8SoundEngine() {
     }
@@ -172,15 +172,22 @@ public class V8SoundEngine {
                 targetVolume = 0.28f + (loadFactor * 0.52f) + (throttle * 0.20f);
             }
 
-            // Deceleration overrun / exhaust crackle trigger:
-            // Happens during regen braking (negative torque) or sudden throttle lift-off
-            boolean isDecelRegen = (torque < -10f && rpm > 1400f);
-            float regenCrackleIntensity = isDecelRegen ? Math.min(1.0f, (-torque) / 100.0f) : 0f;
+            // Deceleration regenerative braking check
+            boolean isDecelRegen = (torque < -10f && rpm > 1200f);
+            float regenIntensity = isDecelRegen ? Math.min(1.0f, (-torque) / 120.0f) : 0f;
+
+            // Smooth compression burble rate (10-14 Hz low-frequency pulse, completely smooth)
+            double regenModInc = (2.0 * Math.PI * (8.0 + regenIntensity * 6.0)) / SAMPLE_RATE;
 
             for (int i = 0; i < BUFFER_SIZE; i++) {
                 phase += phaseInc;
-                if (phase > 2.0 * Math.PI * 1000.0) {
-                    phase -= 2.0 * Math.PI * 1000.0;
+                if (phase > 2.0 * Math.PI * 100.0) {
+                    phase -= 2.0 * Math.PI * 100.0;
+                }
+
+                regenModPhase += regenModInc;
+                if (regenModPhase > 2.0 * Math.PI * 10.0) {
+                    regenModPhase -= 2.0 * Math.PI * 10.0;
                 }
 
                 // Smooth volume transitions to avoid audio clicks
@@ -194,49 +201,35 @@ public class V8SoundEngine {
                 // 1. Primary firing pulse
                 double wave = Math.sin(phase);
                 // 2. Second harmonic (cylinder head resonance)
-                wave += 0.45 * Math.sin(phase * 2.0 + 0.3);
+                wave += 0.42 * Math.sin(phase * 2.0 + 0.3);
                 // 3. Sub-harmonic (cross-plane bank lope / uneven burble at half firing rate)
-                wave += 0.65 * Math.sin(phase * 0.5 + 0.8);
+                wave += 0.60 * Math.sin(phase * 0.5 + 0.8);
                 // 4. Low rumble (quarter firing rate = single cylinder chug)
-                wave += 0.35 * Math.sin(phase * 0.25 + 1.2);
-                // 5. Higher octave bite
-                wave += 0.20 * Math.sin(phase * 3.0 + 0.5);
+                wave += 0.32 * Math.sin(phase * 0.25 + 1.2);
+                // 5. Higher octave exhaust body
+                wave += 0.18 * Math.sin(phase * 3.0 + 0.5);
 
-                // If in regenerative braking, add hollow transmission compression harmonics
-                if (isDecelRegen) {
-                    wave += 0.30 * Math.sin(phase * 1.5 + 0.4);
-                }
-
-                // Non-linear soft saturation driven predominantly by torque load
-                double drive;
-                if (torque < 0f) {
-                    // Lean backpressure saturation during regen
-                    drive = 1.0 + (regenCrackleIntensity * 0.8);
-                } else {
-                    // Positive torque creates thick combustion distortion
-                    drive = 1.0 + (torque / 160.0 * 1.8) + (throttle * 0.8);
-                }
-                double saturated = Math.tanh(wave * drive * 0.85);
-
-                // Throttle intake rush
+                // Throttle intake Helmholtz resonance (pure low-frequency tuned body roar, NO white noise)
                 if (throttle > 0.05f && torque >= 0f) {
-                    double airNoise = (random.nextDouble() * 2.0 - 1.0) * (throttle * 0.16);
-                    saturated += airNoise;
+                    wave += (throttle * 0.38) * Math.sin(phase * 1.5 + 0.2);
                 }
 
-                // Regenerative deceleration exhaust burble / crackle / pops
+                // If in regenerative braking: add hollow compression tone with smooth rhythmic exhaust modulation
                 if (isDecelRegen) {
-                    // Pop frequency scales with negative torque strength
-                    float popChance = 0.012f + (regenCrackleIntensity * 0.028f);
-                    if (random.nextFloat() < popChance) {
-                        double pop = (random.nextDouble() * 2.0 - 1.0) * (0.6 + regenCrackleIntensity * 0.7);
-                        saturated += pop;
-                    }
+                    double compressionTone = 0.35 * Math.sin(phase * 1.25 + 0.5);
+                    // Gentle low-frequency amplitude undulation (smooth natural burble without any clicks/pops)
+                    double burbleMod = 1.0 + (regenIntensity * 0.35 * Math.sin(regenModPhase));
+                    wave = (wave * burbleMod) + compressionTone;
                 }
 
-                double finalSample = saturated * smoothedVolume * 30000.0;
-                if (finalSample > 32767.0) finalSample = 32767.0;
-                if (finalSample < -32768.0) finalSample = -32768.0;
+                // Warm non-linear soft saturation (cubic overdrive gives rich combustion body)
+                double drive = 1.0 + (Math.max(0f, torque) / 140.0 * 1.4) + (throttle * 0.7);
+                double saturated = Math.tanh(wave * drive * 0.80);
+
+                // Smooth soft limiting to prevent any speaker clipping
+                double finalSample = saturated * smoothedVolume * 27000.0;
+                if (finalSample > 32000.0) finalSample = 32000.0;
+                if (finalSample < -32000.0) finalSample = -32000.0;
 
                 buffer[i] = (short) finalSample;
             }
@@ -271,7 +264,7 @@ public class V8SoundEngine {
         if (currentSpeedKmH < 2.0f && currentThrottle < 0.06f) {
             // Stationary Idle: Natural cross-plane lope between 850 and 900 RPM
             currentGear = 1;
-            float lopeOffset = (float) (Math.sin(lopePhase1) * 18.0 + Math.cos(lopePhase2) * 12.0 + (random.nextFloat() - 0.5f) * 6.0);
+            float lopeOffset = (float) (Math.sin(lopePhase1) * 18.0 + Math.cos(lopePhase2) * 12.0);
             float targetIdle = BASE_IDLE_RPM + lopeOffset; // bobs around 850 - 900
             currentRpm += (targetIdle - currentRpm) * 0.15f;
         } else if (currentSpeedKmH < 3.0f && currentThrottle >= 0.06f) {
