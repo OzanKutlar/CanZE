@@ -88,6 +88,18 @@ public class ConsumptionActivity extends CanzeActivity implements FieldListener,
                 setContentView(R.layout.activity_consumption);
             }
         }
+
+        final View metersCard = findViewById(R.id.card_consumption_meters);
+        if (metersCard != null) {
+            metersCard.setAlpha(0f);
+            metersCard.setTranslationY(30f);
+            metersCard.animate()
+                    .alpha(1f)
+                    .translationY(0f)
+                    .setDuration(350)
+                    .setInterpolator(new android.view.animation.DecelerateInterpolator())
+                    .start();
+        }
     }
 
     @Override
