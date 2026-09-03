@@ -1,3 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
 <ScrollView
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
@@ -76,34 +77,50 @@
                     android:textStyle="bold"
                     android:letterSpacing="0.05" />
 
-                <LinearLayout
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="bottom"
+                <RelativeLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:gravity="center_vertical"
                     android:layout_marginTop="4dp">
 
-                    <TextView
-                        android:id="@+id/textAvChPwr"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/default_Dash"
-                        android:textColor="#00E5FF"
-                        android:textSize="36sp"
-                        android:textStyle="bold"
-                        android:includeFontPadding="false" />
+                    <ProgressBar
+                        android:id="@+id/spinnerAvChPwr"
+                        style="?android:attr/progressBarStyleSmall"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
+                        android:layout_centerVertical="true"
+                        android:indeterminate="true" />
 
-                    <TextView
+                    <LinearLayout
+                        android:id="@+id/containerAvChPwr"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="4dp"
-                        android:layout_marginLeft="4dp"
-                        android:layout_marginBottom="4dp"
-                        android:text="kW"
-                        android:textColor="#00E5FF"
-                        android:textSize="12sp"
-                        android:textStyle="bold" />
-                </LinearLayout>
+                        android:orientation="horizontal"
+                        android:gravity="bottom"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/textAvChPwr"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/default_Dash"
+                            android:textColor="#00E5FF"
+                            android:textSize="36sp"
+                            android:textStyle="bold"
+                            android:includeFontPadding="false" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp"
+                            android:layout_marginLeft="4dp"
+                            android:layout_marginBottom="4dp"
+                            android:text="kW"
+                            android:textColor="#00E5FF"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </RelativeLayout>
             </LinearLayout>
 
             <!-- Max Charge Rate -->
@@ -126,34 +143,50 @@
                     android:textStyle="bold"
                     android:letterSpacing="0.05" />
 
-                <LinearLayout
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="bottom"
+                <RelativeLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:gravity="center_vertical"
                     android:layout_marginTop="4dp">
 
-                    <TextView
-                        android:id="@+id/text_max_charge"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/default_Dash"
-                        android:textColor="#E040FB"
-                        android:textSize="36sp"
-                        android:textStyle="bold"
-                        android:includeFontPadding="false" />
+                    <ProgressBar
+                        android:id="@+id/spinnerMaxCharge"
+                        style="?android:attr/progressBarStyleSmall"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
+                        android:layout_centerVertical="true"
+                        android:indeterminate="true" />
 
-                    <TextView
+                    <LinearLayout
+                        android:id="@+id/containerMaxCharge"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="4dp"
-                        android:layout_marginLeft="4dp"
-                        android:layout_marginBottom="4dp"
-                        android:text="kW"
-                        android:textColor="#E040FB"
-                        android:textSize="12sp"
-                        android:textStyle="bold" />
-                </LinearLayout>
+                        android:orientation="horizontal"
+                        android:gravity="bottom"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/text_max_charge"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/default_Dash"
+                            android:textColor="#E040FB"
+                            android:textSize="36sp"
+                            android:textStyle="bold"
+                            android:includeFontPadding="false" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp"
+                            android:layout_marginLeft="4dp"
+                            android:layout_marginBottom="4dp"
+                            android:text="kW"
+                            android:textColor="#E040FB"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </RelativeLayout>
             </LinearLayout>
         </LinearLayout>
 
@@ -185,34 +218,50 @@
                     android:textStyle="bold"
                     android:letterSpacing="0.05" />
 
-                <LinearLayout
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="bottom"
+                <RelativeLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:gravity="center_vertical"
                     android:layout_marginTop="4dp">
 
-                    <TextView
-                        android:id="@+id/textDcPwr"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/default_Dash"
-                        android:textColor="#00E676"
-                        android:textSize="36sp"
-                        android:textStyle="bold"
-                        android:includeFontPadding="false" />
+                    <ProgressBar
+                        android:id="@+id/spinnerDcPwr"
+                        style="?android:attr/progressBarStyleSmall"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
+                        android:layout_centerVertical="true"
+                        android:indeterminate="true" />
 
-                    <TextView
+                    <LinearLayout
+                        android:id="@+id/containerDcPwr"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="4dp"
-                        android:layout_marginLeft="4dp"
-                        android:layout_marginBottom="4dp"
-                        android:text="kW"
-                        android:textColor="#00E676"
-                        android:textSize="12sp"
-                        android:textStyle="bold" />
-                </LinearLayout>
+                        android:orientation="horizontal"
+                        android:gravity="bottom"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/textDcPwr"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/default_Dash"
+                            android:textColor="#00E676"
+                            android:textSize="36sp"
+                            android:textStyle="bold"
+                            android:includeFontPadding="false" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp"
+                            android:layout_marginLeft="4dp"
+                            android:layout_marginBottom="4dp"
+                            android:text="kW"
+                            android:textColor="#00E676"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </RelativeLayout>
             </LinearLayout>
 
             <!-- Range (KMA) -->
@@ -235,34 +284,50 @@
                     android:textStyle="bold"
                     android:letterSpacing="0.05" />
 
-                <LinearLayout
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="bottom"
+                <RelativeLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:gravity="center_vertical"
                     android:layout_marginTop="4dp">
 
-                    <TextView
-                        android:id="@+id/textKMA"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/default_Dash"
-                        android:textColor="#FFD600"
-                        android:textSize="36sp"
-                        android:textStyle="bold"
-                        android:includeFontPadding="false" />
+                    <ProgressBar
+                        android:id="@+id/spinnerKMA"
+                        style="?android:attr/progressBarStyleSmall"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
+                        android:layout_centerVertical="true"
+                        android:indeterminate="true" />
 
-                    <TextView
+                    <LinearLayout
+                        android:id="@+id/containerKMA"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="4dp"
-                        android:layout_marginLeft="4dp"
-                        android:layout_marginBottom="4dp"
-                        android:text="km"
-                        android:textColor="#FFD600"
-                        android:textSize="12sp"
-                        android:textStyle="bold" />
-                </LinearLayout>
+                        android:orientation="horizontal"
+                        android:gravity="bottom"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/textKMA"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/default_Dash"
+                            android:textColor="#FFD600"
+                            android:textSize="36sp"
+                            android:textStyle="bold"
+                            android:includeFontPadding="false" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp"
+                            android:layout_marginLeft="4dp"
+                            android:layout_marginBottom="4dp"
+                            android:text="km"
+                            android:textColor="#FFD600"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </RelativeLayout>
             </LinearLayout>
         </LinearLayout>
 
@@ -302,6 +367,15 @@
                     android:textColor="#CFD8DC"
                     android:textSize="14sp" />
 
+                <ProgressBar
+                    android:id="@+id/spinnerUserSOC"
+                    style="?android:attr/progressBarStyleSmall"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_alignParentEnd="true"
+                    android:layout_alignParentRight="true"
+                    android:indeterminate="true" />
+
                 <TextView
                     android:id="@+id/textUserSOC"
                     android:layout_width="wrap_content"
@@ -311,7 +385,8 @@
                     android:text="@string/default_Dash"
                     android:textColor="#00E5FF"
                     android:textSize="16sp"
-                    android:textStyle="bold" />
+                    android:textStyle="bold"
+                    android:visibility="gone" />
             </RelativeLayout>
             <View
                 android:layout_width="match_parent"
@@ -334,6 +409,15 @@
                     android:textColor="#CFD8DC"
                     android:textSize="14sp" />
 
+                <ProgressBar
+                    android:id="@+id/spinnerRealSOC"
+                    style="?android:attr/progressBarStyleSmall"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_alignParentEnd="true"
+                    android:layout_alignParentRight="true"
+                    android:indeterminate="true" />
+
                 <TextView
                     android:id="@+id/textRealSOC"
                     android:layout_width="wrap_content"
@@ -343,7 +427,8 @@
                     android:text="@string/default_Dash"
                     android:textColor="#00E5FF"
                     android:textSize="16sp"
-                    android:textStyle="bold" />
+                    android:textStyle="bold"
+                    android:visibility="gone" />
             </RelativeLayout>
             <View
                 android:layout_width="match_parent"
@@ -366,6 +451,15 @@
                     android:textColor="#CFD8DC"
                     android:textSize="14sp" />
 
+                <ProgressBar
+                    android:id="@+id/spinnerSOH"
+                    style="?android:attr/progressBarStyleSmall"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_alignParentEnd="true"
+                    android:layout_alignParentRight="true"
+                    android:indeterminate="true" />
+
                 <TextView
                     android:id="@+id/textSOH"
                     android:layout_width="wrap_content"
@@ -375,7 +469,8 @@
                     android:text="@string/default_Dash"
                     android:textColor="#00E676"
                     android:textSize="16sp"
-                    android:textStyle="bold" />
+                    android:textStyle="bold"
+                    android:visibility="gone" />
             </RelativeLayout>
             <View
                 android:layout_width="match_parent"
@@ -398,6 +493,15 @@
                     android:textColor="#CFD8DC"
                     android:textSize="14sp" />
 
+                <ProgressBar
+                    android:id="@+id/spinnerHvTemp"
+                    style="?android:attr/progressBarStyleSmall"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_alignParentEnd="true"
+                    android:layout_alignParentRight="true"
+                    android:indeterminate="true" />
+
                 <TextView
                     android:id="@+id/textHvTemp"
                     android:layout_width="wrap_content"
@@ -407,7 +511,8 @@
                     android:text="@string/default_Dash"
                     android:textColor="#FF9100"
                     android:textSize="16sp"
-                    android:textStyle="bold" />
+                    android:textStyle="bold"
+                    android:visibility="gone" />
             </RelativeLayout>
         </LinearLayout>
 

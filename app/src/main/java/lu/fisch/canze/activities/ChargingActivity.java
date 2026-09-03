@@ -22,6 +22,7 @@
 package lu.fisch.canze.activities;
 
 import android.os.Bundle;
+import android.view.View;
 import android.widget.TextView;
 
 import java.util.Locale;
@@ -31,23 +32,16 @@ import lu.fisch.canze.actors.Field;
 import lu.fisch.canze.interfaces.DebugListener;
 import lu.fisch.canze.interfaces.FieldListener;
 
-// If you want to monitor changes, you must add a FieldField to the fields.
-// For the simple activity, the easiest way is to implement it in the activity itself.
 public class ChargingActivity extends CanzeActivity implements FieldListener, DebugListener {
 
     public static final String SID_MaxCharge                        = "7bb.6101.336";
     public static final String SID_UserSoC                          = "42e.0";
-//  public static final String SID_RealSoC                          = "654.25";
     public static final String SID_RealSoC                          = "7bb.6103.192";
     public static final String SID_AvChargingPower                  = "427.40";
     public static final String SID_ACPilot                          = "42e.38";
     public static final String SID_HvTemp                           = "42e.44";
     public static final String SID_HvTempFluKan                     = "7bb.6103.56";
-
-//  public static final String SID_SOH                              = "658.33";
     public static final String SID_RangeEstimate                    = "654.42";
-//  public static final String SID_TractionBatteryVoltage           = "7ec.623203.24";
-//  public static final String SID_TractionBatteryCurrent           = "7ec.623204.24";
     public static final String SID_DcPower                          = "800.6103.24"; // Virtual field
     public static final String SID_SOH                              = "7ec.623206.24";
 
@@ -64,7 +58,7 @@ public class ChargingActivity extends CanzeActivity implements FieldListener, De
         int[] cardIds = {R.id.card_charging_power, R.id.card_dc_range, R.id.card_battery_telemetry};
         long delay = 60;
         for (int id : cardIds) {
-            final android.view.View v = findViewById(id);
+            final View v = findViewById(id);
             if (v != null) {
                 v.setAlpha(0f);
                 v.setTranslationY(30f);
@@ -80,90 +74,112 @@ public class ChargingActivity extends CanzeActivity implements FieldListener, De
         }
     }
 
+    @Override
     protected void initListeners() {
         MainActivity.getInstance().setDebugListener(this);
         addField(SID_MaxCharge, 5000, R.id.text_max_charge);
         addField(SID_UserSoC, 5000, R.id.textUserSOC);
         addField(SID_RealSoC, 5000, R.id.textRealSOC);
-        addField(SID_SOH, 5000, R.id.textSOH); // state of health gives continuous timeouts. This frame is send at a very low rate
+        addField(SID_SOH, 5000, R.id.textSOH);
         addField(SID_RangeEstimate, 5000, R.id.textKMA);
         addField(SID_DcPower, 5000, R.id.textDcPwr);
         if (MainActivity.car == MainActivity.CAR_ZOE_Q210 || MainActivity.car == MainActivity.CAR_ZOE_R240 || MainActivity.car == MainActivity.CAR_ZOE_Q90 || MainActivity.car == MainActivity.CAR_ZOE_R90) {
             addField(SID_AvChargingPower, 5000, R.id.textAvChPwr);
             addField(SID_HvTemp, 5000, R.id.textHvTemp);
-        } else { //FLuKan
+        } else { // FluKan
             addField(SID_HvTempFluKan, 5000);
             addField(SID_ACPilot, 5000, R.id.textAvChPwr);
         }
     }
 
-    // This is the event fired as soon as this the registered fields are
-    // getting updated by the corresponding reader class.
     @Override
     public void onFieldUpdateEvent(final Field field) {
-        // the update has to be done in a separate thread
-        // otherwise the UI will not be repainted
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
                 String fieldId = field.getSID();
                 TextView tv = null;
+                int spinnerId = 0;
+                int containerId = 0;
 
-                // get the text field
                 switch (fieldId) {
-
                     case SID_MaxCharge:
                         double maxCharge = field.getValue();
-                        int color = 0xffc0c0c0; // standard grey
+                        int color = 0xffc0c0c0;
                         if (maxCharge < (avChPwr * 0.8) && avChPwr < 45.0) {
                             color = 0xffffc0c0;
                         }
                         tv = findViewById(R.id.text_max_charge);
-                        tv.setBackgroundColor(color);
+                        if (tv != null) tv.setBackgroundColor(color);
+                        spinnerId = R.id.spinnerMaxCharge;
+                        containerId = R.id.containerMaxCharge;
                         break;
                     case SID_UserSoC:
                         tv = findViewById(R.id.textUserSOC);
+                        spinnerId = R.id.spinnerUserSOC;
                         break;
                     case SID_RealSoC:
                         tv = findViewById(R.id.textRealSOC);
+                        spinnerId = R.id.spinnerRealSOC;
                         break;
                     case SID_HvTemp:
                         tv = findViewById(R.id.textHvTemp);
+                        spinnerId = R.id.spinnerHvTemp;
                         break;
                     case SID_SOH:
                         tv = findViewById(R.id.textSOH);
+                        spinnerId = R.id.spinnerSOH;
                         break;
                     case SID_RangeEstimate:
                         tv = findViewById(R.id.textKMA);
-                        if (field.getValue() >= 1023) {
-                            tv.setText("---");
-                        } else {
-                            tv.setText(String.format(Locale.getDefault(), "%.0f", field.getValue()));
+                        spinnerId = R.id.spinnerKMA;
+                        containerId = R.id.containerKMA;
+                        if (tv != null) {
+                            if (field.getValue() >= 1023) {
+                                tv.setText("---");
+                            } else {
+                                tv.setText(String.format(Locale.getDefault(), "%.0f", field.getValue()));
+                            }
                         }
                         tv = null;
                         break;
                     case SID_DcPower:
                         tv = findViewById(R.id.textDcPwr);
+                        spinnerId = R.id.spinnerDcPwr;
+                        containerId = R.id.containerDcPwr;
                         break;
                     case SID_AvChargingPower:
                         avChPwr = field.getValue();
                         tv = findViewById(R.id.textAvChPwr);
+                        spinnerId = R.id.spinnerAvChPwr;
+                        containerId = R.id.containerAvChPwr;
                         if (avChPwr > 45.0) {
-                            tv.setText("---");
+                            if (tv != null) tv.setText("---");
                             tv = null;
                         }
                         break;
                     case SID_ACPilot:
                         avChPwr = field.getValue() * 0.225;
                         tv = findViewById(R.id.textAvChPwr);
+                        spinnerId = R.id.spinnerAvChPwr;
+                        containerId = R.id.containerAvChPwr;
                         break;
                 }
-                // set regular new content, all exceptions handled above
+
+                if (spinnerId != 0) {
+                    View spinner = findViewById(spinnerId);
+                    if (spinner != null) spinner.setVisibility(View.GONE);
+                }
+                if (containerId != 0) {
+                    View container = findViewById(containerId);
+                    if (container != null) container.setVisibility(View.VISIBLE);
+                }
+
                 if (tv != null) {
+                    tv.setVisibility(View.VISIBLE);
                     tv.setText(String.format(Locale.getDefault(), "%.1f", field.getValue()));
                 }
             }
         });
-
     }
 }

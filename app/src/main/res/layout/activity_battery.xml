@@ -1,165 +1,859 @@
-<LinearLayout
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
-    xmlns:custom="http://schemas.android.com/apk/res-auto"
-    android:orientation="vertical"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#0B0F19"
+    android:fillViewport="true"
     android:keepScreenOn="true"
-    android:paddingLeft="12dp"
-    android:paddingRight="12dp"
-    android:paddingTop="12dp"
-    android:paddingBottom="12dp"
-    tools:context="lu.fisch.canze.activities.BatteryActivity"
-    >
+    tools:context="lu.fisch.canze.activities.BatteryActivity">
 
-    <TableLayout
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        >
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
 
-        <TableRow
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:orientation="horizontal"
-            android:layout_weight="1">
-
-            <lu.fisch.canze.widgets.WidgetView
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="match_parent"
-                custom:min="0"
-                custom:max="0"
-                custom:majorTicks="0"
-                custom:minorTicks="0"
-                custom:fieldSID="658.33"
-                custom:widget="label"
-                custom:text="@string/graph_SOH"
-                />
-
-            <lu.fisch.canze.widgets.WidgetView
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="match_parent"
-                android:layout_marginLeft="8dp"
-                android:layout_marginStart="8dp"
-                custom:min="0"
-                custom:max="120"
-                custom:majorTicks="10"
-                custom:minorTicks="5"
-                custom:fieldSID="7bb.6103.192,654.25"
-                custom:widget="timeplot"
-                custom:text="@string/graph_RealIndicatedSoc"
-                />
-        </TableRow>
-
-        <!-- SERIAL NUMBER BADGE -->
-        <TableRow
+        <!-- HEADER -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginTop="6dp"
-            android:layout_marginBottom="4dp">
+            android:gravity="center_vertical"
+            android:layout_marginBottom="14dp">
+
+            <View
+                android:layout_width="4dp"
+                android:layout_height="22dp"
+                android:background="#00E5FF"
+                android:layout_marginEnd="8dp"
+                android:layout_marginRight="8dp" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/title_activity_battery"
+                android:textColor="#FFFFFF"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="● TRACTION BATTERY"
+                android:textColor="#00E5FF"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.1" />
+        </LinearLayout>
+
+        <!-- HERO ROW: AVAILABLE RANGE & AVAILABLE KW -->
+        <LinearLayout
+            android:id="@+id/card_hero_battery"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="12dp">
+
+            <!-- Available Range -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="@drawable/bg_motor_card"
+                android:orientation="vertical"
+                android:padding="14dp"
+                android:layout_marginEnd="6dp"
+                android:layout_marginRight="6dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/label_DISTA"
+                    android:textColor="#8A99AD"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.05" />
+
+                <RelativeLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:gravity="center_vertical"
+                    android:layout_marginTop="4dp">
+
+                    <ProgressBar
+                        android:id="@+id/spinnerRange"
+                        style="?android:attr/progressBarStyleSmall"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
+                        android:layout_centerVertical="true"
+                        android:indeterminate="true" />
+
+                    <LinearLayout
+                        android:id="@+id/containerRange"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="bottom"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/textRange"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/default_Dash"
+                            android:textColor="#FFD600"
+                            android:textSize="36sp"
+                            android:textStyle="bold"
+                            android:includeFontPadding="false" />
+
+                        <TextView
+                            android:id="@+id/textRangeUnit"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp"
+                            android:layout_marginLeft="4dp"
+                            android:layout_marginBottom="4dp"
+                            android:text="km"
+                            android:textColor="#FFD600"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </RelativeLayout>
+            </LinearLayout>
+
+            <!-- Available Energy / kW -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="@drawable/bg_motor_card"
+                android:orientation="vertical"
+                android:padding="14dp"
+                android:layout_marginStart="6dp"
+                android:layout_marginLeft="6dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/label_AvEner"
+                    android:textColor="#8A99AD"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.05" />
+
+                <RelativeLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:gravity="center_vertical"
+                    android:layout_marginTop="4dp">
+
+                    <ProgressBar
+                        android:id="@+id/spinnerEnergy"
+                        style="?android:attr/progressBarStyleSmall"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
+                        android:layout_centerVertical="true"
+                        android:indeterminate="true" />
+
+                    <LinearLayout
+                        android:id="@+id/containerEnergy"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="bottom"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/textEnergy"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/default_Dash"
+                            android:textColor="#00E5FF"
+                            android:textSize="36sp"
+                            android:textStyle="bold"
+                            android:includeFontPadding="false" />
+
+                        <TextView
+                            android:id="@+id/textEnergyUnit"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp"
+                            android:layout_marginLeft="4dp"
+                            android:layout_marginBottom="4dp"
+                            android:text="kWh"
+                            android:textColor="#00E5FF"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </RelativeLayout>
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- INDICATOR 1 & 2: SOH AND REAL VS INDICATED SOC DELTA -->
+        <LinearLayout
+            android:id="@+id/card_soh_delta"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="12dp">
+
+            <!-- Indicator 1: State of Health (SOH) -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="@drawable/bg_motor_card"
+                android:orientation="vertical"
+                android:padding="14dp"
+                android:layout_marginEnd="6dp"
+                android:layout_marginRight="6dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/label_SOH"
+                    android:textColor="#8A99AD"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.05" />
+
+                <RelativeLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:gravity="center_vertical"
+                    android:layout_marginTop="4dp">
+
+                    <ProgressBar
+                        android:id="@+id/spinnerSOH"
+                        style="?android:attr/progressBarStyleSmall"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
+                        android:layout_centerVertical="true"
+                        android:indeterminate="true" />
+
+                    <LinearLayout
+                        android:id="@+id/containerSOH"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="bottom"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/textSOHVal"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/default_Dash"
+                            android:textColor="#00E676"
+                            android:textSize="36sp"
+                            android:textStyle="bold"
+                            android:includeFontPadding="false" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp"
+                            android:layout_marginLeft="4dp"
+                            android:layout_marginBottom="4dp"
+                            android:text="%"
+                            android:textColor="#00E676"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </RelativeLayout>
+
+                <TextView
+                    android:id="@+id/textSOHSub"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:textColor="#607D8B"
+                    android:textSize="11sp"
+                    android:text="State of Health" />
+            </LinearLayout>
+
+            <!-- Indicator 2: Real vs Indicated Delta -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="@drawable/bg_motor_card"
+                android:orientation="vertical"
+                android:padding="14dp"
+                android:layout_marginStart="6dp"
+                android:layout_marginLeft="6dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="REAL VS INDICATED"
+                    android:textColor="#8A99AD"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.05" />
+
+                <RelativeLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:gravity="center_vertical"
+                    android:layout_marginTop="4dp">
+
+                    <ProgressBar
+                        android:id="@+id/spinnerSocDelta"
+                        style="?android:attr/progressBarStyleSmall"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
+                        android:layout_centerVertical="true"
+                        android:indeterminate="true" />
+
+                    <LinearLayout
+                        android:id="@+id/containerSocDelta"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="bottom"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/textSocDelta"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/default_Dash"
+                            android:textColor="#00E5FF"
+                            android:textSize="36sp"
+                            android:textStyle="bold"
+                            android:includeFontPadding="false" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp"
+                            android:layout_marginLeft="4dp"
+                            android:layout_marginBottom="4dp"
+                            android:text="%"
+                            android:textColor="#00E5FF"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </RelativeLayout>
+
+                <TextView
+                    android:id="@+id/textSocDetails"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:textColor="#607D8B"
+                    android:textSize="11sp"
+                    android:text="Average delta" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- INDICATOR 3: CELL VOLTAGES (MIN, MAX, DIFFERENCE) -->
+        <LinearLayout
+            android:id="@+id/card_cell_voltages"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_motor_card"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:layout_marginBottom="12dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:background="@drawable/bg_motor_card"
-                android:gravity="center"
-                android:padding="8dp">
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="12dp">
 
                 <TextView
-                    android:id="@+id/textBatterySerial"
-                    android:layout_width="wrap_content"
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:textColor="#00E5FF"
-                    android:textSize="14sp"
+                    android:layout_weight="1"
+                    android:text="CELL VOLTAGES"
+                    android:textColor="#8A99AD"
+                    android:textSize="12sp"
                     android:textStyle="bold"
-                    android:text="Serial: -" />
+                    android:letterSpacing="0.1" />
+
+                <ProgressBar
+                    android:id="@+id/spinnerVoltages"
+                    style="?android:attr/progressBarStyleSmall"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:indeterminate="true" />
             </LinearLayout>
-        </TableRow>
 
-        <!-- HELP LINK -->
-        <TableRow
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="6dp">
-
-            <TextView
-                android:id="@+id/link"
+            <LinearLayout
+                android:id="@+id/containerVoltages"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:textColor="#8A99AD"
-                android:textColorLink="#00E5FF"
-                android:textSize="11sp"
-                android:gravity="center"
-                android:text="" />
-        </TableRow>
+                android:orientation="horizontal"
+                android:baselineAligned="false"
+                android:visibility="gone">
 
-        <TableRow
+                <!-- Min Voltage -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:gravity="center_horizontal">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="MIN VOLTAGE"
+                        android:textColor="#607D8B"
+                        android:textSize="10sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/textCellMin"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/default_Dash"
+                        android:textColor="#00E5FF"
+                        android:textSize="22sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="V"
+                        android:textColor="#8A99AD"
+                        android:textSize="11sp" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="1dp"
+                    android:layout_height="40dp"
+                    android:layout_gravity="center_vertical"
+                    android:background="#1F293D" />
+
+                <!-- Max Voltage -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:gravity="center_horizontal">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="MAX VOLTAGE"
+                        android:textColor="#607D8B"
+                        android:textSize="10sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/textCellMax"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/default_Dash"
+                        android:textColor="#00E676"
+                        android:textSize="22sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="V"
+                        android:textColor="#8A99AD"
+                        android:textSize="11sp" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="1dp"
+                    android:layout_height="40dp"
+                    android:layout_gravity="center_vertical"
+                    android:background="#1F293D" />
+
+                <!-- Delta Difference -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:gravity="center_horizontal">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="DIFFERENCE (Δ)"
+                        android:textColor="#607D8B"
+                        android:textSize="10sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/textCellDiff"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/default_Dash"
+                        android:textColor="#FFD600"
+                        android:textSize="22sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="mV"
+                        android:textColor="#8A99AD"
+                        android:textSize="11sp" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- INDICATOR 4: BATTERY MODULE TEMPERATURE HEATMAP -->
+        <LinearLayout
+            android:id="@+id/card_heatmap"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_motor_card"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:layout_marginBottom="14dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="12dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="MODULE TEMPERATURES HEATMAP"
+                    android:textColor="#8A99AD"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1" />
+
+                <ProgressBar
+                    android:id="@+id/spinnerHeatmap"
+                    style="?android:attr/progressBarStyleSmall"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:indeterminate="true" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/containerHeatmap"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <!-- 4 PRIMARY MODULE BOXES (Heatmap for 4 compartments / first 4) -->
+                <GridLayout
+                    android:id="@+id/gridHeatmapPrimary"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:columnCount="2"
+                    android:rowCount="2"
+                    android:alignmentMode="alignMargins">
+
+                    <!-- Box 1 -->
+                    <LinearLayout
+                        android:id="@+id/boxTemp1"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_columnWeight="1"
+                        android:layout_margin="4dp"
+                        android:background="#1A2436"
+                        android:orientation="vertical"
+                        android:gravity="center"
+                        android:padding="12dp">
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="MOD 1"
+                            android:textColor="#8A99AD"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+                        <TextView
+                            android:id="@+id/textModTemp1"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="--°"
+                            android:textColor="#FFFFFF"
+                            android:textSize="22sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <!-- Box 2 -->
+                    <LinearLayout
+                        android:id="@+id/boxTemp2"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_columnWeight="1"
+                        android:layout_margin="4dp"
+                        android:background="#1A2436"
+                        android:orientation="vertical"
+                        android:gravity="center"
+                        android:padding="12dp">
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="MOD 2"
+                            android:textColor="#8A99AD"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+                        <TextView
+                            android:id="@+id/textModTemp2"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="--°"
+                            android:textColor="#FFFFFF"
+                            android:textSize="22sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <!-- Box 3 -->
+                    <LinearLayout
+                        android:id="@+id/boxTemp3"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_columnWeight="1"
+                        android:layout_margin="4dp"
+                        android:background="#1A2436"
+                        android:orientation="vertical"
+                        android:gravity="center"
+                        android:padding="12dp">
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="MOD 3"
+                            android:textColor="#8A99AD"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+                        <TextView
+                            android:id="@+id/textModTemp3"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="--°"
+                            android:textColor="#FFFFFF"
+                            android:textSize="22sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <!-- Box 4 -->
+                    <LinearLayout
+                        android:id="@+id/boxTemp4"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_columnWeight="1"
+                        android:layout_margin="4dp"
+                        android:background="#1A2436"
+                        android:orientation="vertical"
+                        android:gravity="center"
+                        android:padding="12dp">
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="MOD 4"
+                            android:textColor="#8A99AD"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+                        <TextView
+                            android:id="@+id/textModTemp4"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="--°"
+                            android:textColor="#FFFFFF"
+                            android:textSize="22sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </GridLayout>
+
+                <!-- ADDITIONAL EXTENDED MODULES FOR 12-MODULE BATTERIES (ZOE) -->
+                <GridLayout
+                    android:id="@+id/gridHeatmapExtended"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:columnCount="4"
+                    android:layout_marginTop="4dp"
+                    android:alignmentMode="alignMargins"
+                    android:visibility="gone">
+
+                    <!-- Modules 5 to 12 -->
+                    <!-- Box 5 -->
+                    <LinearLayout
+                        android:id="@+id/boxTemp5"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_columnWeight="1"
+                        android:layout_margin="3dp"
+                        android:background="#1A2436"
+                        android:orientation="vertical"
+                        android:gravity="center"
+                        android:padding="8dp">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="M5" android:textColor="#8A99AD" android:textSize="9sp" android:textStyle="bold" />
+                        <TextView android:id="@+id/textModTemp5" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="--°" android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold" />
+                    </LinearLayout>
+                    <!-- Box 6 -->
+                    <LinearLayout
+                        android:id="@+id/boxTemp6"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_columnWeight="1"
+                        android:layout_margin="3dp"
+                        android:background="#1A2436"
+                        android:orientation="vertical"
+                        android:gravity="center"
+                        android:padding="8dp">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="M6" android:textColor="#8A99AD" android:textSize="9sp" android:textStyle="bold" />
+                        <TextView android:id="@+id/textModTemp6" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="--°" android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold" />
+                    </LinearLayout>
+                    <!-- Box 7 -->
+                    <LinearLayout
+                        android:id="@+id/boxTemp7"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_columnWeight="1"
+                        android:layout_margin="3dp"
+                        android:background="#1A2436"
+                        android:orientation="vertical"
+                        android:gravity="center"
+                        android:padding="8dp">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="M7" android:textColor="#8A99AD" android:textSize="9sp" android:textStyle="bold" />
+                        <TextView android:id="@+id/textModTemp7" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="--°" android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold" />
+                    </LinearLayout>
+                    <!-- Box 8 -->
+                    <LinearLayout
+                        android:id="@+id/boxTemp8"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_columnWeight="1"
+                        android:layout_margin="3dp"
+                        android:background="#1A2436"
+                        android:orientation="vertical"
+                        android:gravity="center"
+                        android:padding="8dp">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="M8" android:textColor="#8A99AD" android:textSize="9sp" android:textStyle="bold" />
+                        <TextView android:id="@+id/textModTemp8" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="--°" android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold" />
+                    </LinearLayout>
+                    <!-- Box 9 -->
+                    <LinearLayout
+                        android:id="@+id/boxTemp9"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_columnWeight="1"
+                        android:layout_margin="3dp"
+                        android:background="#1A2436"
+                        android:orientation="vertical"
+                        android:gravity="center"
+                        android:padding="8dp">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="M9" android:textColor="#8A99AD" android:textSize="9sp" android:textStyle="bold" />
+                        <TextView android:id="@+id/textModTemp9" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="--°" android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold" />
+                    </LinearLayout>
+                    <!-- Box 10 -->
+                    <LinearLayout
+                        android:id="@+id/boxTemp10"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_columnWeight="1"
+                        android:layout_margin="3dp"
+                        android:background="#1A2436"
+                        android:orientation="vertical"
+                        android:gravity="center"
+                        android:padding="8dp">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="M10" android:textColor="#8A99AD" android:textSize="9sp" android:textStyle="bold" />
+                        <TextView android:id="@+id/textModTemp10" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="--°" android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold" />
+                    </LinearLayout>
+                    <!-- Box 11 -->
+                    <LinearLayout
+                        android:id="@+id/boxTemp11"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_columnWeight="1"
+                        android:layout_margin="3dp"
+                        android:background="#1A2436"
+                        android:orientation="vertical"
+                        android:gravity="center"
+                        android:padding="8dp">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="M11" android:textColor="#8A99AD" android:textSize="9sp" android:textStyle="bold" />
+                        <TextView android:id="@+id/textModTemp11" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="--°" android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold" />
+                    </LinearLayout>
+                    <!-- Box 12 -->
+                    <LinearLayout
+                        android:id="@+id/boxTemp12"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_columnWeight="1"
+                        android:layout_margin="3dp"
+                        android:background="#1A2436"
+                        android:orientation="vertical"
+                        android:gravity="center"
+                        android:padding="8dp">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="M12" android:textColor="#8A99AD" android:textSize="9sp" android:textStyle="bold" />
+                        <TextView android:id="@+id/textModTemp12" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="--°" android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold" />
+                    </LinearLayout>
+                </GridLayout>
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- SERIAL NUMBER BADGE -->
+        <LinearLayout
+            android:id="@+id/card_battery_serial"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_motor_card"
+            android:gravity="center"
+            android:padding="10dp"
+            android:layout_marginBottom="8dp">
+
+            <TextView
+                android:id="@+id/textBatterySerial"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="#00E5FF"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:text="Serial: -" />
+        </LinearLayout>
+
+        <!-- HELP LINK -->
+        <TextView
+            android:id="@+id/link"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#8A99AD"
+            android:textColorLink="#00E5FF"
+            android:textSize="11sp"
+            android:gravity="center"
+            android:layout_marginBottom="8dp"
+            android:text="" />
+
+        <!-- DEBUG LINE -->
+        <LinearLayout
             android:orientation="horizontal"
-            android:layout_weight="1">
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="4dp">
 
-            <lu.fisch.canze.widgets.WidgetView
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="match_parent"
-                android:layout_marginBottom="8dp"
-                custom:min="3"
-                custom:max="5"
-                custom:majorTicks="1"
-                custom:minorTicks="0"
-                custom:fieldSID="7bb.6141.16,7bb.6141.32,7bb.6141.48,7bb.6141.64,7bb.6141.80,7bb.6141.96,7bb.6141.112,7bb.6141.128,7bb.6141.144,7bb.6141.160,7bb.6141.176,7bb.6141.192,7bb.6141.208,7bb.6141.224,7bb.6141.240,7bb.6141.256,7bb.6141.272,7bb.6141.288,7bb.6141.304,7bb.6141.320,7bb.6141.336,7bb.6141.352,7bb.6141.368,7bb.6141.384,7bb.6141.400,7bb.6141.416,7bb.6141.432,7bb.6141.448,7bb.6141.464,7bb.6141.480,7bb.6141.496,7bb.6141.512,7bb.6141.528,7bb.6141.544,7bb.6141.560,7bb.6141.576,7bb.6141.592,7bb.6141.608,7bb.6141.624,7bb.6141.640,7bb.6141.656,7bb.6141.672,7bb.6141.688,7bb.6141.704,7bb.6141.720,7bb.6141.736,7bb.6141.752,7bb.6141.768,7bb.6141.784,7bb.6141.800,7bb.6141.816,7bb.6141.832,7bb.6141.848,7bb.6141.864,7bb.6141.880,7bb.6141.896,7bb.6141.912,7bb.6141.928,7bb.6141.944,7bb.6141.960,7bb.6141.976,7bb.6141.992,7bb.6142.16,7bb.6142.32,7bb.6142.48,7bb.6142.64,7bb.6142.80,7bb.6142.96,7bb.6142.112,7bb.6142.128,7bb.6142.144,7bb.6142.160,7bb.6142.176,7bb.6142.192,7bb.6142.208,7bb.6142.224,7bb.6142.240,7bb.6142.256,7bb.6142.272,7bb.6142.288,7bb.6142.304,7bb.6142.320,7bb.6142.336,7bb.6142.352,7bb.6142.368,7bb.6142.384,7bb.6142.400,7bb.6142.416,7bb.6142.432,7bb.6142.448,7bb.6142.464,7bb.6142.480,7bb.6142.496,7bb.6142.512,7bb.6142.528,7bb.6142.544"
-                custom:widget="plotter"
-                custom:text="@string/graph_CellVoltages"
-                />
+            <TextView
+                android:text="@string/label_debug"
+                android:textColor="#546E7A"
+                android:textSize="11sp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+            <TextView
+                android:id="@+id/textDebug"
+                android:text="@string/default_debug"
+                android:textColor="#546E7A"
+                android:textSize="11sp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
 
-            <lu.fisch.canze.widgets.WidgetView
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="match_parent"
-                android:layout_marginLeft="8dp"
-                android:layout_marginStart="8dp"
-                android:layout_marginBottom="8dp"
-                custom:min="0"
-                custom:max="50"
-                custom:majorTicks="10"
-                custom:minorTicks="5"
-                custom:fieldSID="7bb.6104.32,7bb.6104.56,7bb.6104.80,7bb.6104.104,7bb.6104.128,7bb.6104.152,7bb.6104.176,7bb.6104.200,7bb.6104.224,7bb.6104.248,7bb.6104.272,7bb.6104.296"
-                custom:widget="plotter"
-                custom:text="@string/graph_ModuleTemperatures"
-                />
-        </TableRow>
-
-    </TableLayout>
-
-    <!-- DEBUG LINE -->
-    <LinearLayout
-        android:orientation="horizontal"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:paddingTop="4dp">
-
-        <TextView
-            android:text="@string/label_debug"
-            android:textColor="#546E7A"
-            android:textSize="11sp"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content" />
-        <TextView
-            android:id="@+id/textDebug"
-            android:text="@string/default_debug"
-            android:textColor="#546E7A"
-            android:textSize="11sp"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content" />
     </LinearLayout>
-
-</LinearLayout>
+</ScrollView>
