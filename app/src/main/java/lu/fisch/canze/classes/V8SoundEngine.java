@@ -72,7 +72,8 @@ public class V8SoundEngine {
     private float currentTorqueNm = 0f;
     private float currentSpeedKmH = 0f;
     private float downshiftBlip = 0f;
-    private float shiftTorqueCut = 1.0f;
+    private float targetShiftCut = 1.0f;
+    private float smoothedShiftCut = 1.0f;
 
     // Oscillators & acoustics
     private double crankPhase = 0.0;
@@ -176,24 +177,27 @@ public class V8SoundEngine {
             // 1 crank rev = 2 * PI radians, RPM = revs per min
             double crankRadPerSample = (rpm / 60.0) * (2.0 * Math.PI) / SAMPLE_RATE;
 
-            // Target master volume based on torque and throttle
+            // Target master volume continuously unified at torque = 0 to prevent zero-crossing clicks
             float targetVolume;
             if (isMuted) {
                 targetVolume = 0.0f;
-            } else if (torque < -5f) {
-                // Regenerative braking: deep hollow compression tone
-                float regenFactor = Math.min(1.0f, -torque / 140.0f);
-                targetVolume = 0.32f + (regenFactor * 0.36f);
             } else {
-                // Driving power: scaling with torque pull and throttle opening
-                float loadFactor = Math.min(1.0f, Math.max(0f, torque) / 180.0f);
-                targetVolume = 0.26f + (loadFactor * 0.54f) + (throttle * 0.20f);
+                float baseVolume = 0.26f + (throttle * 0.18f);
+                if (torque >= 0f) {
+                    // Positive drive torque
+                    float loadFactor = Math.min(1.0f, torque / 180.0f);
+                    targetVolume = baseVolume + (loadFactor * 0.52f);
+                } else {
+                    // Negative torque (regenerative braking)
+                    // Smoothly anchors at baseVolume when torque is 0 Nm with zero jump
+                    float regenFactor = Math.min(1.0f, -torque / 140.0f);
+                    targetVolume = baseVolume + (regenFactor * 0.38f);
+                }
             }
 
-            // Deceleration regenerative braking detection
-            boolean isDecelRegen = (torque < -10f && rpm > 1100f);
-            float regenIntensity = isDecelRegen ? Math.min(1.0f, (-torque) / 130.0f) : 0f;
-            double regenModInc = (2.0 * Math.PI * (7.0 + regenIntensity * 8.0)) / SAMPLE_RATE;
+            // Continuous deceleration regen intensity starting seamlessly at 0 Nm
+            float regenIntensity = (torque < 0f && rpm > 950f) ? Math.min(1.0f, (-torque) / 120.0f) : 0f;
+            double regenModInc = (2.0 * Math.PI * (7.0 + regenIntensity * 7.0)) / SAMPLE_RATE;
 
             // Helmholtz induction frequency (around 80 - 150 Hz with RPM)
             double intakeFreq = 70.0 + (rpm * 0.025);
@@ -216,8 +220,9 @@ public class V8SoundEngine {
                     regenModPhase -= 2.0 * Math.PI;
                 }
 
-                // Smooth volume changes to prevent clicks
+                // Smooth volume and shift cut changes per-sample to eliminate clicks
                 smoothedVolume += (targetVolume - smoothedVolume) * 0.004f;
+                smoothedShiftCut += (targetShiftCut - smoothedShiftCut) * 0.006f;
                 if (smoothedVolume < 0.001f) {
                     buffer[i] = 0;
                     continue;
@@ -258,16 +263,17 @@ public class V8SoundEngine {
                 double subRumble = Math.sin(crankPhase * 0.5) * 0.35 + Math.sin(crankPhase * 1.0) * 0.20;
                 exhaustSignal += subRumble;
 
-                // Throttle body Helmholtz induction roar (throaty intake growl on load)
-                if (throttle > 0.05f && torque >= 0f) {
-                    double intakeRoar = Math.sin(intakePhase) * (throttle * 0.42);
+                // Throttle body Helmholtz induction roar (smoothly scaled by throttle)
+                if (throttle > 0.02f && torque > -10f) {
+                    float throttleScale = Math.min(1.0f, (throttle - 0.02f) / 0.98f);
+                    double intakeRoar = Math.sin(intakePhase) * (throttleScale * 0.38);
                     exhaustSignal += intakeRoar;
                 }
 
-                // Regenerative braking compression rumble (clean, hollow, non-static burble)
-                if (isDecelRegen) {
-                    // Completely smooth, harmonic compression tone (1.5 * 4*PI = 6*PI, 0.5 * 4*PI = 2*PI)
-                    double compressionTone = Math.sin(crankPhase * 1.5) * 0.32 + Math.sin(crankPhase * 0.5) * 0.18;
+                // Regenerative braking compression rumble (scaled continuously by regenIntensity)
+                if (regenIntensity > 0.001f) {
+                    // Smooth harmonic compression tone (1.5 * 4*PI = 6*PI, 0.5 * 4*PI = 2*PI)
+                    double compressionTone = Math.sin(crankPhase * 1.5) * 0.30 + Math.sin(crankPhase * 0.5) * 0.18;
                     // Deep undulating cadence modulation (6-9 Hz rhythmic exhaust throb)
                     double burbleMod = 1.0 + (regenIntensity * 0.35 * Math.sin(regenModPhase));
                     exhaustSignal = (exhaustSignal * burbleMod) + (compressionTone * regenIntensity);
@@ -277,8 +283,8 @@ public class V8SoundEngine {
                 double drive = 1.0 + (Math.max(0f, torque) / 130.0 * 1.5) + (throttle * 0.6);
                 double saturated = Math.tanh(exhaustSignal * drive * 0.85);
 
-                // Output amplitude scaling with smooth ceiling limiting
-                double finalSample = saturated * smoothedVolume * shiftTorqueCut * 28000.0;
+                // Output amplitude scaling with smooth sample-interpolated shift cut and ceiling limiting
+                double finalSample = saturated * smoothedVolume * smoothedShiftCut * 28000.0;
                 if (finalSample > 32000.0) finalSample = 32000.0;
                 if (finalSample < -32000.0) finalSample = -32000.0;
 
@@ -323,7 +329,7 @@ public class V8SoundEngine {
         currentTorqueNm += (torque - currentTorqueNm) * 0.18f;
         currentSpeedKmH += (speed - currentSpeedKmH) * 0.15f;
         downshiftBlip *= 0.82f;
-        shiftTorqueCut += (1.0f - shiftTorqueCut) * 0.15f;
+        targetShiftCut += (1.0f - targetShiftCut) * 0.15f;
 
         // Advance idle cam lope wobble oscillators
         lopePhase1 += 0.14;
@@ -365,13 +371,13 @@ public class V8SoundEngine {
 
             float rawGearRpm = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 1];
 
-            // Shift logic with momentary torque cut for realistic shift feeling
+            // Shift logic with subtle automatic transmission dip (no harsh audio cutout)
             if (rawGearRpm > upshiftRpm && currentGear < 6) {
                 currentGear++;
-                shiftTorqueCut = 0.55f; // Gear change drop
+                targetShiftCut = 0.82f; // Smooth acoustic transmission dip
             } else if (rawGearRpm < downshiftRpm && currentGear > 1 && !isKickdown) {
                 currentGear--;
-                downshiftBlip = 300f;
+                downshiftBlip = 280f;
             }
 
             float lockedRpm = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 1] + downshiftBlip;
