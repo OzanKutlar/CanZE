@@ -532,7 +532,8 @@ public class ELM327 extends Device {
 
         hexData = hexData.trim();
         if (hexData.equals(""))
-            return new Message(frame, "-E-data empty", true);
+            // nothing came back at all within the timeout
+            return new Message(frame, "-E-data empty", true, Message.ERROR_TIMEOUT);
         else
             return new Message(frame, hexData, false);
     }
@@ -636,7 +637,8 @@ public class ELM327 extends Device {
         } else if (elmResponse.compareTo("?") == 0) {
             return new Message(frame, "-E-Unknown command", true);
         } else if (elmResponse.compareTo("") == 0) {
-            return new Message(frame, "-E-Empty result", true);
+            // no answer within the timeout: candidate for blacklisting
+            return new Message(frame, "-E-Empty result", true, Message.ERROR_TIMEOUT);
         }
 
         // get type (first nibble of first line)
@@ -701,7 +703,7 @@ public class ELM327 extends Device {
         hexData = (hexData.length() <= len) ? hexData.trim().toLowerCase() : hexData.substring(0, len).trim().toLowerCase();
 
         if (hexData.equals(""))
-            return new Message(frame, "-E-data empty", true);
+            return new Message(frame, "-E-data empty", true, Message.ERROR_TIMEOUT);
         else
             return new Message(frame, hexData, false);
     }

@@ -63,18 +63,18 @@ public class ClimaTechActivity extends CanzeActivity implements FieldListener, D
     protected void initListeners() {
         MainActivity.getInstance().setDebugListener(this);
         if (MainActivity.isZOE()) {
-            addField(SID_EngineFanSpeed, 0);
-            addField(SID_DcPower, 0);
+            addField(SID_EngineFanSpeed, 0, R.id.text_EFS);
+            addField(SID_DcPower, 0, R.id.text_DCP);
             // addListener(SID_ChargingPower);
-            addField(SID_HvCoolingState, 0);
-            addField(SID_HvEvaporationTemp, 10000);
+            addField(SID_HvCoolingState, 0, R.id.text_HCS);
+            addField(SID_HvEvaporationTemp, 10000, R.id.text_HET);
             // addField(SID_ClimaCompressorPower,0);
-            addField(SID_Pressure, 1000);
-            addField(SID_BatteryConditioningMode, 0);
-            addField(SID_ClimaLoopMode, 0);
-            addField(SID_PtcRelay1, 1000);
-            addField(SID_PtcRelay2, 1000);
-            addField(SID_PtcRelay3, 1000);
+            addField(SID_Pressure, 1000, R.id.text_PRE);
+            addField(SID_BatteryConditioningMode, 0, R.id.text_HCM);
+            addField(SID_ClimaLoopMode, 0, R.id.text_CLM);
+            addField(SID_PtcRelay1, 1000, R.id.text_PTC1);
+            addField(SID_PtcRelay2, 1000, R.id.text_PTC2);
+            addField(SID_PtcRelay3, 1000, R.id.text_PTC3);
         }
     }
 

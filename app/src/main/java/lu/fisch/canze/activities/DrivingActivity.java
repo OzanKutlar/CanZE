@@ -115,19 +115,19 @@ public class DrivingActivity extends CanzeActivity implements FieldListener, Deb
 
         // Make sure to add ISO-TP listeners grouped by ID
         MainActivity.getInstance().setDebugListener(this);
-        addField(SID_DcPower, 0);
+        addField(SID_DcPower, 0, R.id.textConsumption);
         addField(SID_Pedal, 0);
         addField(SID_MeanEffectiveTorque, 0);
         addField(SID_DriverBrakeWheel_Torque_Request, 0);
         addField(SID_ElecBrakeWheelsTorqueApplied, 0);
         addField(SID_Coasting_Torque, 0);
         addField(SID_TotalPotentialResistiveWheelsTorque, 0);
-        addField(SID_RealSpeed, 0);
-        addField(SID_SoC, 7200);
+        addField(SID_RealSpeed, 0, R.id.textRealSpeed);
+        addField(SID_SoC, 7200, R.id.textSOC);
         addField(SID_RangeEstimate, 7200);
         addField(SID_EVC_Odometer, 6000);
-        addField(SID_EVC_TripBmeter, 6000);
-        addField(SID_EVC_TripBenergy, 6000);
+        addField(SID_EVC_TripBmeter, 6000, R.id.textTripDistance);
+        addField(SID_EVC_TripBenergy, 6000, R.id.textTripEnergy);
     }
 
     void setDistanceToDestination() {

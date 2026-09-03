@@ -56,12 +56,12 @@ public class AuxBattTechActivity extends CanzeActivity implements FieldListener,
 
     protected void initListeners() {
         MainActivity.getInstance().setDebugListener(this);
-        addField(SID_AuxVoltage);
-        addField(SID_AuxStatus, 1000);
-        addField(SID_VehicleState);
-        addField(SID_ChargingStatusDisplay, 1000);
-        addField(SID_VoltageUnderLoad, 6000);
-        addField(SID_CurrentUnderLoad, 6000);
+        addField(SID_AuxVoltage, 0, R.id.text_12V);
+        addField(SID_AuxStatus, 1000, R.id.textAuxStatus);
+        addField(SID_VehicleState, 0, R.id.text_vehicle_state);
+        addField(SID_ChargingStatusDisplay, 1000, R.id.textChaStatus);
+        addField(SID_VoltageUnderLoad, 6000, R.id.textVoltageLoad);
+        addField(SID_CurrentUnderLoad, 6000, R.id.textCurrentLoad);
     }
 
 

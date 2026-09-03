@@ -56,6 +56,7 @@ import java.util.Set;
 import lu.fisch.canze.BuildConfig;
 import lu.fisch.canze.R;
 import lu.fisch.canze.actors.Fields;
+import lu.fisch.canze.classes.Blacklist;
 import lu.fisch.canze.database.CanzeDataSource;
 
 import static lu.fisch.canze.activities.MainActivity.toast;
@@ -456,6 +457,37 @@ public class SettingsActivity extends AppCompatActivity {
 
                 MainActivity.fields.clearAllFields();
                 toast(MainActivity.getStringSingle(R.string.toast_CacheCleared));
+            }
+        });
+
+        Button resetSkipped = findViewById(R.id.buttonResetSkipped);
+        resetSkipped.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                final Context context = SettingsActivity.this;
+                AlertDialog.Builder alertDialogBuilder = new AlertDialog.Builder(context);
+
+                alertDialogBuilder.setTitle(R.string.label_ResetSkipped);
+                alertDialogBuilder
+                        .setMessage(MainActivity.getStringSingle(R.string.prompt_ResetSkipped))
+                        .setCancelable(true)
+                        .setPositiveButton(MainActivity.getStringSingle(R.string.default_Yes),
+                                new DialogInterface.OnClickListener() {
+                                    public void onClick(DialogInterface dialog, int id) {
+                                        int cleared = Blacklist.getInstance().clear();
+                                        toast(MainActivity.getStringSingle(R.string.toast_SkippedCleared) + " " + cleared);
+                                        dialog.cancel();
+                                    }
+                                })
+                        .setNegativeButton(MainActivity.getStringSingle(R.string.default_No),
+                                new DialogInterface.OnClickListener() {
+                                    public void onClick(DialogInterface dialog, int id) {
+                                        dialog.cancel();
+                                    }
+                                });
+
+                AlertDialog alertDialog = alertDialogBuilder.create();
+                alertDialog.show();
             }
         });
 

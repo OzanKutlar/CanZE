@@ -260,6 +260,27 @@ public class Field {
         return interval;
     }
 
+    /**
+     * Whether this field's frame has been blacklisted after repeated failures.
+     * Deliberately derived from the frame rather than stored on the field, so that
+     * the clones handed to listeners always report the current state.
+     *
+     * @return true if this value is no longer being requested
+     */
+    public boolean isSkipped()
+    {
+        return frame != null && frame.isSkipped();
+    }
+
+    /**
+     * Push the current state to all listeners. Used when a field becomes skipped,
+     * so the user interface can repaint it even though no new value arrived.
+     */
+    public void notifyListeners()
+    {
+        notifyFieldListeners();
+    }
+
 
     /* --------------------------------
      * Getters & setters

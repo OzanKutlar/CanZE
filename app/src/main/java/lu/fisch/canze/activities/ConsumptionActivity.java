@@ -56,11 +56,11 @@ public class ConsumptionActivity extends CanzeActivity implements FieldListener,
 
     public void initListeners () {
         MainActivity.getInstance().setDebugListener(this);
-        addField(SID_MeanEffectiveTorque, 0);
+        addField(SID_MeanEffectiveTorque, 0, R.id.text_wheel_torque);
         addField(SID_DriverBrakeWheel_Torque_Request, 0);
         addField(SID_Coasting_Torque, 0);
         addField(SID_TotalPotentialResistiveWheelsTorque, 7200);
-        addField(SID_Instant_Consumption, 0);
+        addField(SID_Instant_Consumption, 0, R.id.text_instant_consumption_negative);
     }
 
     @Override

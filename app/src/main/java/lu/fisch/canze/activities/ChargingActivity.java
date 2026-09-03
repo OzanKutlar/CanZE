@@ -61,18 +61,18 @@ public class ChargingActivity extends CanzeActivity implements FieldListener, De
 
     protected void initListeners() {
         MainActivity.getInstance().setDebugListener(this);
-        addField(SID_MaxCharge, 5000);
-        addField(SID_UserSoC, 5000);
-        addField(SID_RealSoC, 5000);
-        addField(SID_SOH, 5000); // state of health gives continuous timeouts. This frame is send at a very low rate
-        addField(SID_RangeEstimate, 5000);
-        addField(SID_DcPower, 5000);
+        addField(SID_MaxCharge, 5000, R.id.text_max_charge);
+        addField(SID_UserSoC, 5000, R.id.textUserSOC);
+        addField(SID_RealSoC, 5000, R.id.textRealSOC);
+        addField(SID_SOH, 5000, R.id.textSOH); // state of health gives continuous timeouts. This frame is send at a very low rate
+        addField(SID_RangeEstimate, 5000, R.id.textKMA);
+        addField(SID_DcPower, 5000, R.id.textDcPwr);
         if (MainActivity.car == MainActivity.CAR_ZOE_Q210 || MainActivity.car == MainActivity.CAR_ZOE_R240 || MainActivity.car == MainActivity.CAR_ZOE_Q90 || MainActivity.car == MainActivity.CAR_ZOE_R90) {
-            addField(SID_AvChargingPower, 5000);
-            addField(SID_HvTemp, 5000);
+            addField(SID_AvChargingPower, 5000, R.id.textAvChPwr);
+            addField(SID_HvTemp, 5000, R.id.textHvTemp);
         } else { //FLuKan
             addField(SID_HvTempFluKan, 5000);
-            addField(SID_ACPilot, 5000);
+            addField(SID_ACPilot, 5000, R.id.textAvChPwr);
         }
     }
 

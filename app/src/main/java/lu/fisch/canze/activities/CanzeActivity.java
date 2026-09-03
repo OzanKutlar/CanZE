@@ -21,25 +21,41 @@
 
 package lu.fisch.canze.activities;
 
+import android.content.res.ColorStateList;
 import android.os.Bundle;
 import androidx.appcompat.app.AppCompatActivity;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.FrameLayout;
 import android.widget.TextView;
 
 import java.security.InvalidParameterException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 
 import lu.fisch.canze.R;
 import lu.fisch.canze.actors.Field;
 import lu.fisch.canze.bluetooth.BluetoothManager;
+import lu.fisch.canze.classes.Blacklist;
 import lu.fisch.canze.interfaces.FieldListener;
 import lu.fisch.canze.widgets.WidgetView;
 
 /**
  * Created by robertfisch on 30.09.2015.
  */
-public abstract class CanzeActivity extends AppCompatActivity implements FieldListener {
+public abstract class CanzeActivity extends AppCompatActivity implements FieldListener, Blacklist.ChangeListener {
+
+    /** colour applied to the text of a value that is no longer being requested */
+    private static final int SKIPPED_TEXT_COLOR = 0xFFCC0000;
+
+    /** SID -> id of the TextView showing it, populated by addField(sid, interval, viewId) */
+    private final HashMap<String, Integer> skipViewIds = new HashMap<>();
+    /** original text colours, captured once so un-skipping restores them faithfully */
+    private final HashMap<Integer, ColorStateList> originalTextColors = new HashMap<>();
+
+    private TextView skipBanner = null;
 
     private boolean iLeftMyOwn = false;
     private boolean back = false;
@@ -78,6 +94,9 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
     protected void onPause() {
         super.onPause();
         MainActivity.debug("CanzeActivity: onPause");
+
+        // done before the early return below, so we never leave a stale listener behind
+        Blacklist.getInstance().clearChangeListener(this);
 
         // stop here if BT should stay on!
         if(MainActivity.bluetoothBackgroundMode)
@@ -121,6 +140,10 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
         }
         widgetClicked=false;
         initListeners();
+
+        installSkipBanner();
+        Blacklist.getInstance().setChangeListener(this);
+        applySkipColors();
     }
 
     @Override
@@ -254,6 +277,22 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
         addField(sid, 0);
     }
 
+    /**
+     * Register a field and remember which TextView displays it, so that the value can
+     * be turned red if it ever gets blacklisted.
+     *
+     * @param sid        the field to register
+     * @param intervalMs the polling interval
+     * @param viewId     the id of the TextView showing this value, or 0 for none
+     */
+    protected void addField(String sid, int intervalMs, int viewId)
+    {
+        addField(sid, intervalMs);
+        if (viewId != 0) {
+            skipViewIds.put(sid, viewId);
+        }
+    }
+
     protected void addField(String sid, int intervalMs)
     {
         Field field = MainActivity.fields.getBySID(sid);
@@ -279,6 +318,96 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
             field.removeListener(this);
         }
         subscribedFields.clear();
+        // note: originalTextColors is deliberately NOT cleared. Re-capturing after we
+        // already painted a view red would record red as the "original" colour.
+        skipViewIds.clear();
+    }
+
+    /* ------------- skipped value feedback ------------- */
+
+    @Override
+    public void onBlacklistChanged() {
+        applySkipColors();
+    }
+
+    /**
+     * Adds a red strip at the top of the screen. Uses addContentView rather than
+     * assuming anything about the root view, since the layouts in this app root at
+     * LinearLayout, ScrollView and TableLayout depending on the screen.
+     */
+    private void installSkipBanner() {
+        if (skipBanner != null) return;
+
+        skipBanner = new TextView(this);
+        skipBanner.setBackgroundColor(SKIPPED_TEXT_COLOR);
+        skipBanner.setTextColor(0xFFFFFFFF);
+        skipBanner.setTextSize(11);
+        skipBanner.setPadding(8, 4, 8, 4);
+        skipBanner.setVisibility(View.GONE);
+
+        FrameLayout overlay = new FrameLayout(this);
+        overlay.addView(skipBanner, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP));
+
+        addContentView(overlay, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
+
+    private void updateSkipBanner() {
+        if (skipBanner == null) return;
+
+        StringBuilder skipped = new StringBuilder();
+        int count = 0;
+        for (Field field : subscribedFields) {
+            if (field == null || !field.isSkipped()) continue;
+            if (count > 0) skipped.append(", ");
+            skipped.append(field.getSID());
+            count++;
+        }
+
+        if (count == 0) {
+            skipBanner.setVisibility(View.GONE);
+            return;
+        }
+
+        skipBanner.setText(MainActivity.getStringSingle(R.string.label_SkippedOnThisScreen) + " " + skipped);
+        skipBanner.setVisibility(View.VISIBLE);
+    }
+
+    /**
+     * Paint every mapped TextView red if its value is blacklisted, restore it otherwise,
+     * and refresh the banner. Safe to call from any thread.
+     */
+    protected void applySkipColors() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                for (Map.Entry<String, Integer> entry : skipViewIds.entrySet()) {
+                    Integer viewId = entry.getValue();
+                    if (viewId == null) continue;
+
+                    View view = findViewById(viewId);
+                    if (!(view instanceof TextView)) continue;
+                    TextView tv = (TextView) view;
+
+                    if (!originalTextColors.containsKey(viewId)) {
+                        originalTextColors.put(viewId, tv.getTextColors());
+                    }
+
+                    Field field = MainActivity.fields.getBySID(entry.getKey());
+                    if (field != null && field.isSkipped()) {
+                        tv.setTextColor(SKIPPED_TEXT_COLOR);
+                    } else {
+                        ColorStateList original = originalTextColors.get(viewId);
+                        if (original != null) tv.setTextColor(original);
+                    }
+                }
+                updateSkipBanner();
+            }
+        });
     }
 
     public void dropDebugMessage (final String msg) {

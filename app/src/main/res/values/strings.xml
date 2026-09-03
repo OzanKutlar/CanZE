@@ -601,6 +601,11 @@
     <string name="label_LogToSdcard1">Log to sdcard1</string>
     <string name="label_Actions">Actions</string>
     <string name="label_ClearCachedData">Clear cached data</string>
+    <string name="label_ResetSkipped">Reset skipped values</string>
+    <string name="prompt_ResetSkipped">Values that failed to answer three times in a row are no longer being requested, so that the values which do work stay responsive.\n\nClear the list and request all of them again?</string>
+    <string name="toast_SkippedCleared">Skipped values cleared:</string>
+    <string name="toast_FieldSkipped">No longer requesting</string>
+    <string name="label_SkippedOnThisScreen">Not answering, skipped:</string>
     <string name="prompt_YesIKnow">Yes</string>
     <string name="prompt_NoSecureWay">No</string>
     <string name="prompt_Attention">ATTENTION</string>

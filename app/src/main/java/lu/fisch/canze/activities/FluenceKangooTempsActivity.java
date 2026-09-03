@@ -57,20 +57,20 @@ public class FluenceKangooTempsActivity extends CanzeActivity implements FieldLi
     protected void initListeners() {
         MainActivity.getInstance().setDebugListener(this);
         if (MainActivity.isZOE()) {
-            addField(SID_ExternalTemperatureZoe, 10000);
+            addField(SID_ExternalTemperatureZoe, 10000, R.id.textExternalTemperature);
             addField(SID_InternalTemperatureZoe, 10000);
             addField(SID_HVEvaporatorTemperature, 10000);
         } else {
-            addField(SID_ExternalTemperature, 10000);
-            addField(SID_InternalTemperature, 10000);
+            addField(SID_ExternalTemperature, 10000, R.id.textExternalTemperature);
+            addField(SID_InternalTemperature, 10000, R.id.textInternalTemperature);
         }
-        addField(SID_EvaporatorTemperature, 10000);
-        addField(SID_WaterTemperatureHeating, 10000);
-        addField(SID_DcDcConverterTemperature, 10000);
-        addField(SID_InverterTemperature, 10000);
-        addField(SID_MotorWaterPumpSpeed, 2000);
-        addField(SID_ChargerWaterPumpSpeed, 2000);
-        addField(SID_HeatingWaterPumpSpeed, 2000);
+        addField(SID_EvaporatorTemperature, 10000, R.id.textEvaporatorTemperature);
+        addField(SID_WaterTemperatureHeating, 10000, R.id.textWaterTemperatureHeating);
+        addField(SID_DcDcConverterTemperature, 10000, R.id.textDcDcConverterTemperature);
+        addField(SID_InverterTemperature, 10000, R.id.textInverterTemperature);
+        addField(SID_MotorWaterPumpSpeed, 2000, R.id.textMotorWaterPumpSpeed);
+        addField(SID_ChargerWaterPumpSpeed, 2000, R.id.textChargerWaterPumpSpeed);
+        addField(SID_HeatingWaterPumpSpeed, 2000, R.id.textHeatingWaterPumpSpeed);
     }
 
     // This is the event fired as soon as this the registered fields are

@@ -260,6 +260,9 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
         try {
             SharedPreferences settings = getSharedPreferences(PREFERENCES_FILE, 0);
             versionChangeCheck(settings);
+            // restore the list of values that repeatedly failed to answer, before the
+            // device (and therefore the poller) is created below
+            lu.fisch.canze.classes.Blacklist.getInstance().load(settings);
             bluetoothDeviceName = settings.getString("deviceName", null);
             bluetoothDeviceAddress = settings.getString("deviceAddress", null);
             gatewayUrl = settings.getString("gatewayUrl", null);

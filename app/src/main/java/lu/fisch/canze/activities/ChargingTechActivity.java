@@ -102,28 +102,28 @@ public class ChargingTechActivity extends CanzeActivity implements FieldListener
         MainActivity.getInstance().setDebugListener(this);
         //if (MainActivity.device != null) MainActivity.device.injectRequest(SID_TesterInit);
         addField(SID_TesterInit, lu.fisch.canze.devices.Device.INTERVAL_ONCE);
-        addField(SID_MaxCharge, 5000);
-        addField(SID_ACPilot, 5000);
-        addField(SID_TimeToFull, 5000);
-        addField(SID_PlugConnected, 5000);
-        addField(SID_UserSoC, 5000);
-        addField(SID_RealSoC, 5000);
+        addField(SID_MaxCharge, 5000, R.id.text_max_charge);
+        addField(SID_ACPilot, 5000, R.id.text_max_pilot);
+        addField(SID_TimeToFull, 5000, R.id.textTTF);
+        addField(SID_PlugConnected, 5000, R.id.textPlug);
+        addField(SID_UserSoC, 5000, R.id.textUserSOC);
+        addField(SID_RealSoC, 5000, R.id.textRealSOC);
         if (MainActivity.isZOE()) {
-            addField(SID_AvailableChargingPower, 5000);
+            addField(SID_AvailableChargingPower, 5000, R.id.textAvChPwr);
             //} else {
             //    addFields(SID_CapacityFluKan, 5000);
         }
-        addField(SID_AvEnergy, 5000);
-        addField(SID_SOH, 5000); // state of health gives continuous timeouts. This frame is send at a very low rate
-        addField(SID_RangeEstimate, 5000);
-        addField(SID_12V, 5000);
-        addField(SID_12A, 5000);
-        addField(SID_DcLoad, 5000);
-        addField(SID_HvKilometers, 5000);
+        addField(SID_AvEnergy, 5000, R.id.textAvEner);
+        addField(SID_SOH, 5000, R.id.textSOH); // state of health gives continuous timeouts. This frame is send at a very low rate
+        addField(SID_RangeEstimate, 5000, R.id.textKMA);
+        addField(SID_12V, 5000, R.id.text12V);
+        addField(SID_12A, 5000, R.id.text12A);
+        addField(SID_DcLoad, 5000, R.id.textDcLoad);
+        addField(SID_HvKilometers, 5000, R.id.textHKM);
         //addField(SID_EnergyConsumed, 5000);
-        addField(SID_ChargingStatusDisplay, 5000);
-        addField(SID_TractionBatteryVoltage, 5000);
-        addField(SID_TractionBatteryCurrent, 5000);
+        addField(SID_ChargingStatusDisplay, 5000, R.id.textChaStatus);
+        addField(SID_TractionBatteryVoltage, 5000, R.id.textVolt);
+        addField(SID_TractionBatteryCurrent, 5000, R.id.textAmps);
 
         // Battery compartment temperatures
         int lastCell = MainActivity.isZOE() ? 12 : 4;
@@ -135,20 +135,20 @@ public class ChargingTechActivity extends CanzeActivity implements FieldListener
         }
 
         addField(SID_TesterAwake, 1500);
-        addField(SID_MainsCurrentType);
-        addField(SID_Phase1currentRMS);
-        addField(SID_Phase2CurrentRMS);
-        addField(SID_Phase3CurrentRMS);
-        addField(SID_PhaseVoltage1);
-        addField(SID_PhaseVoltage2);
-        addField(SID_PhaseVoltage3);
-        addField(SID_InterPhaseVoltage12);
-        addField(SID_InterPhaseVoltage23);
-        addField(SID_InterPhaseVoltage31);
-        addField(SID_MainsActivePower);
-        addField(SID_GroundResistance);
-        addField(SID_SupervisorState);
-        addField(SID_CompletionStatus);
+        addField(SID_MainsCurrentType, 0, R.id.textMainsCurrentType);
+        addField(SID_Phase1currentRMS, 0, R.id.textPhase1CurrentRMS);
+        addField(SID_Phase2CurrentRMS, 0, R.id.textPhase2CurrentRMS);
+        addField(SID_Phase3CurrentRMS, 0, R.id.textPhase3CurrentRMS);
+        addField(SID_PhaseVoltage1, 0, R.id.textPhaseVoltage1);
+        addField(SID_PhaseVoltage2, 0, R.id.textPhaseVoltage2);
+        addField(SID_PhaseVoltage3, 0, R.id.textPhaseVoltage3);
+        addField(SID_InterPhaseVoltage12, 0, R.id.textInterPhaseVoltage12);
+        addField(SID_InterPhaseVoltage23, 0, R.id.textInterPhaseVoltage23);
+        addField(SID_InterPhaseVoltage31, 0, R.id.textInterPhaseVoltage31);
+        addField(SID_MainsActivePower, 0, R.id.textMainsActivePower);
+        addField(SID_GroundResistance, 0, R.id.textGroundResistance);
+        addField(SID_SupervisorState, 0, R.id.textSupervisorState);
+        addField(SID_CompletionStatus, 0, R.id.textCompletionStatus);
     }
 
     // This is the event fired as soon as this the registered fields are

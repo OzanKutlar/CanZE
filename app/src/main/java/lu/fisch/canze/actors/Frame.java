@@ -24,6 +24,8 @@ package lu.fisch.canze.actors;
 import java.util.ArrayList;
 import java.util.Calendar;
 
+import lu.fisch.canze.classes.Blacklist;
+
 /**
  * Frame
  */
@@ -36,6 +38,9 @@ public class Frame {
     private final ArrayList<Field> fields = new ArrayList<>();
     private final ArrayList<Field> queriedFields = new ArrayList<>();
     private Frame containingFrame;
+
+    /** number of consecutive failed requests for this frame */
+    private int consecutiveFailures = 0;
 
     protected long lastRequest = 0;
 
@@ -65,6 +70,40 @@ public class Frame {
     public boolean isDue(long referenceTime)
     {
         return lastRequest+interval<referenceTime;
+    }
+
+    /* --------------------------------
+     * Failure tracking
+     * ------------------------------ */
+
+    /**
+     * Record one failed request for this frame.
+     *
+     * @return the new number of consecutive failures
+     */
+    public synchronized int registerFailure() {
+        if (consecutiveFailures < Integer.MAX_VALUE) {
+            consecutiveFailures++;
+        }
+        return consecutiveFailures;
+    }
+
+    /**
+     * Record a successful request, clearing the failure streak.
+     */
+    public synchronized void registerSuccess() {
+        consecutiveFailures = 0;
+    }
+
+    public synchronized int getConsecutiveFailures() {
+        return consecutiveFailures;
+    }
+
+    /**
+     * @return true if this frame has been blacklisted and must not be polled
+     */
+    public boolean isSkipped() {
+        return Blacklist.getInstance().contains(getRID());
     }
 
     public int getInterval() {

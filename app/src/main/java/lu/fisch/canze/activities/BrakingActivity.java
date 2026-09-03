@@ -53,8 +53,8 @@ public class BrakingActivity extends CanzeActivity implements FieldListener, Deb
 
     protected void initListeners() {
         MainActivity.getInstance().setDebugListener(this);
-        addField(SID_DriverBrakeWheel_Torque_Request);
-        addField(SID_ElecBrakeWheelsTorqueApplied);
+        addField(SID_DriverBrakeWheel_Torque_Request, 0, R.id.text_driver_torque_request);
+        addField(SID_ElecBrakeWheelsTorqueApplied, 0, R.id.text_ElecBrakeWheelsTorqueApplied);
         addField(SID_Coasting_Torque);
         addField(SID_TotalPotentialResistiveWheelsTorque);
     }

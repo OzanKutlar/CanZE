@@ -26,7 +26,9 @@ import java.util.Calendar;
 import java.util.Collections;
 import java.util.Comparator;
 
+import lu.fisch.canze.R;
 import lu.fisch.canze.activities.MainActivity;
+import lu.fisch.canze.classes.Blacklist;
 import lu.fisch.canze.actors.Field;
 import lu.fisch.canze.actors.Fields;
 import lu.fisch.canze.actors.Frame;
@@ -261,12 +263,15 @@ public abstract class Device {
                     // MainActivity.debug("Device: queryNextFilter: " + field.getSID());
                     MainActivity.getInstance().dropDebugMessage(field.getSID());
 
+                    final Frame frame = field.getFrame();
+
                     // get the data
-                    Message message = requestFrame(field.getFrame());
+                    Message message = requestFrame(frame);
 
                     // test if we got something
                     if (!message.isError()) {
                         MainActivity.getInstance().appendDebugMessage("ok");
+                        frame.registerSuccess();
                         // trigger the compete event of the message. It will update all fields linked to it's corresponding frame
                         message.onMessageCompleteEvent();
                         if (field.getInterval() == INTERVAL_ONCE) {
@@ -275,9 +280,10 @@ public abstract class Device {
                     } else {
                         // one plain retry
                         MainActivity.getInstance().appendDebugMessage("...");
-                        message = requestFrame(field.getFrame());
+                        message = requestFrame(frame);
                         if (!message.isError()) {
                             MainActivity.getInstance().appendDebugMessage("ok");
+                            frame.registerSuccess();
                             message.onMessageCompleteEvent();
                             if (field.getInterval() == INTERVAL_ONCE) {
                                 removeActivityField(field);
@@ -287,6 +293,15 @@ public abstract class Device {
                             // failed after single retry. Mark underlying fields as updated to avoid
                             // queue clogging. The frame will have to get back to the end of the queue
                             message.onMessageIncompleteEvent();
+
+                            if (message.countsAsDeadPid() && blacklistIfDead(frame)) {
+                                // The dongle and the bus are demonstrably fine, this PID simply
+                                // does not answer on this car. Skipping the re-initialisation
+                                // here is the whole point: it is what was starving the values
+                                // that do work.
+                                return;
+                            }
+
                             // reset if something went wrong ...
                             // ... but only if we are not asked to stop!
                             if (BluetoothManager.getInstance().isConnected()) {
@@ -305,50 +320,95 @@ public abstract class Device {
         }
     }
 
+    /**
+     * Orders fields by when they are next due.
+     */
+    private static final Comparator<Field> DUE_COMPARATOR = new Comparator<Field>() {
+        @Override
+        public int compare(Field lhs, Field rhs) {
+            return (int) (lhs.getLastRequest() + lhs.getInterval() - (rhs.getLastRequest() + rhs.getInterval()));
+        }
+    };
+
+    /**
+     * Blacklist a frame once it has failed often enough.
+     *
+     * @param frame the frame that just failed
+     * @return true if the frame is now blacklisted, so no device reset is warranted
+     */
+    private boolean blacklistIfDead(Frame frame) {
+        if (frame == null) return false;
+
+        if (frame.registerFailure() < Blacklist.FAILURE_THRESHOLD) return false;
+
+        // Zero the counter. Without this, clearing the blacklist from the settings would
+        // immediately re-blacklist everything on its very next failure, instead of giving
+        // each frame a fresh set of chances.
+        frame.registerSuccess();
+
+        if (!Blacklist.getInstance().add(frame)) {
+            // already on the list, nothing more to announce
+            return true;
+        }
+
+        MainActivity.debug("Device.blacklistIfDead: no longer requesting " + frame.getRID());
+        MainActivity.toast(MainActivity.getStringSingle(R.string.toast_FieldSkipped) + " " + frame.getRID());
+
+        // let every affected field push a final update, so the UI can turn it red
+        for (Field deadField : frame.getAllFields()) {
+            deadField.notifyListeners();
+        }
+        return true;
+    }
+
+    /**
+     * Pick the field that is due first, ignoring blacklisted ones.
+     *
+     * @param candidates    the list to choose from
+     * @param referenceTime now, in milliseconds
+     * @return the field to query, or null if none is pollable or due
+     */
+    private Field getNextDueField(ArrayList<Field> candidates, long referenceTime) {
+        if (candidates == null || candidates.isEmpty()) return null;
+
+        ArrayList<Field> pollable = new ArrayList<>(candidates.size());
+        for (Field candidate : candidates) {
+            if (candidate != null && !candidate.isSkipped()) {
+                pollable.add(candidate);
+            }
+        }
+        if (pollable.isEmpty()) return null;
+
+        Field field = Collections.min(pollable, DUE_COMPARATOR);
+        return field.isDue(referenceTime) ? field : null;
+    }
+
     private Field getNextField() {
         long referenceTime = Calendar.getInstance().getTimeInMillis();
 
         synchronized (fields) {
-            if (applicationFields.size() > 0) {
-                // get the first field (the one with the smallest lastRequest time
-                Field field = Collections.min(applicationFields, new Comparator<Field>() {
-                    @Override
-                    public int compare(Field lhs, Field rhs) {
-                        return (int) (lhs.getLastRequest() + lhs.getInterval() - (rhs.getLastRequest() + rhs.getInterval()));
-                    }
-                });
-
-                // return it's index in the global registered field array
-                if (field.isDue(referenceTime)) {
-                    //MainActivity.debug(Calendar.getInstance().getTimeInMillis()/1000.+" > Chosing: "+field.getSID());
-                    MainActivity.debug("Device.getNextField: applicationFields, " + field.getSID());
-                    return field;
-                }
+            Field field = getNextDueField(applicationFields, referenceTime);
+            if (field != null) {
+                MainActivity.debug("Device.getNextField: applicationFields, " + field.getSID());
+                return field;
             }
 
             // take the next costum field
-            if (activityFieldsScheduled.size() > 0) {
-                // get the first field (the one with the smallest lastRequest time
-                Field field = Collections.min(activityFieldsScheduled, new Comparator<Field>() {
-                    @Override
-                    public int compare(Field lhs, Field rhs) {
-                        return (int) (lhs.getLastRequest() + lhs.getInterval() - (rhs.getLastRequest() + rhs.getInterval()));
-                    }
-                });
-
-                // return it's index in the global registered field array
-                if (field.isDue(referenceTime)) {
-                    //MainActivity.debug(Calendar.getInstance().getTimeInMillis()/1000.+" > Chosing: "+field.getSID());
-                    MainActivity.debug("Device.getNextField: activityFieldsScheduled, " + field.getSID());
-                    return field;
-                }
+            field = getNextDueField(activityFieldsScheduled, referenceTime);
+            if (field != null) {
+                MainActivity.debug("Device.getNextField: activityFieldsScheduled, " + field.getSID());
+                return field;
             }
 
-            if (activityFieldsAsFastAsPossible.size() > 0) {
+            // bounded scan: at most one full pass, so an entirely blacklisted list
+            // cannot spin here forever
+            int candidateCount = activityFieldsAsFastAsPossible.size();
+            for (int i = 0; i < candidateCount; i++) {
                 activityFieldIndex = (activityFieldIndex + 1) % activityFieldsAsFastAsPossible.size();
-                Field field = activityFieldsAsFastAsPossible.get(activityFieldIndex);
-                MainActivity.debug("Device.getNextField: activityFieldsAsFastAsPossible, " + field.getSID());
-                return field;
+                Field candidate = activityFieldsAsFastAsPossible.get(activityFieldIndex);
+                if (candidate == null || candidate.isSkipped()) continue;
+                MainActivity.debug("Device.getNextField: activityFieldsAsFastAsPossible, " + candidate.getSID());
+                return candidate;
             }
 
             MainActivity.debug("Device.getNextField: empty:" + applicationFields.size() + " / " + activityFieldsScheduled.size() + " / " + activityFieldsAsFastAsPossible.size());

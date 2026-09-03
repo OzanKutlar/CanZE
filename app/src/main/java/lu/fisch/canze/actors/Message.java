@@ -41,22 +41,54 @@ public class Message {
     // part now represents a readable error. The methods ensure that the data part is only
     // processed when there is no error condition set
 
+    /** no error at all */
+    public static final int ERROR_NONE = 0;
+    /** a dongle or bus level problem: says nothing about whether the PID exists */
+    public static final int ERROR_OTHER = 1;
+    /** the device did not answer within the timeout */
+    public static final int ERROR_TIMEOUT = 2;
+    /** the ECU explicitly refused the request (negative response) */
+    public static final int ERROR_UNSUPPORTED = 3;
+
     private final Frame frame;
     private final String data;
     private final boolean error;
+    private final int errorKind;
 
+    /**
+     * Backwards compatible constructor. Any error created this way is classified as
+     * ERROR_OTHER and will therefore never cause a frame to be blacklisted.
+     */
     public Message(Frame frame, String data, boolean error) {
+        this(frame, data, error, error ? ERROR_OTHER : ERROR_NONE);
+    }
+
+    public Message(Frame frame, String data, boolean error, int errorKind) {
         MainActivity.debug("Message.new.data:" + data);
         this.frame=frame;
-        if (frame.isIsoTp()) {
-            if (data.startsWith("7f")) {
-                this.error = true;
-                this.data = "-E-Message.isotp.startswith7f";
-                return;
-            }
+        if (frame.isIsoTp() && data != null && data.startsWith("7f")) {
+            // the ECU answered, but refused the request. On a non standard car this is the
+            // strongest possible signal that the PID simply does not exist.
+            this.error = true;
+            this.errorKind = ERROR_UNSUPPORTED;
+            this.data = "-E-Message.isotp.startswith7f";
+            return;
         }
         this.data=data;
         this.error=error;
+        this.errorKind = error ? errorKind : ERROR_NONE;
+    }
+
+    public int getErrorKind() {
+        return errorKind;
+    }
+
+    /**
+     * @return true if this error indicates the PID itself is dead, rather than the
+     *         dongle or the bus being in trouble
+     */
+    public boolean countsAsDeadPid() {
+        return error && (errorKind == ERROR_TIMEOUT || errorKind == ERROR_UNSUPPORTED);
     }
 
     /* --------------------------------

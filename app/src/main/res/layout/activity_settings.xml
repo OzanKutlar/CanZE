@@ -240,6 +240,12 @@
 
                         </LinearLayout>
 
+                        <Button
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/label_ResetSkipped"
+                            android:id="@+id/buttonResetSkipped" />
+
                     </LinearLayout>
                 </TableRow>
             </TableLayout>
