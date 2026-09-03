@@ -487,10 +487,10 @@ public class ELM327 extends Device {
 
         // set the flag that a timeout has occurred. someThingWrong can be inspected anywhere, but we reset the device after a full filter has been run
         if (timedOut) {
-            /* if (timeoutLogLevel >= 2 || (timeoutLogLevel >= 1 && (command==null || (!command.startsWith("atma") && command.startsWith("at"))))) {
-                MainActivity.toast("Timeout on [" + command + "][" + readBuffer.replace("\r", "<cr>").replace(" ", "<sp>") + "]");
-            } */
-            MainActivity.toast(MainActivity.TOAST_ELM, "Timeout on [" + command + "] [" + readBuffer.toString().replace("\r", "<cr>").replace(" ", "<sp>") + "]");
+            // Do not show toast on 'atma' broadcast frames, as transient frame delays on the car bus are normal
+            if (command != null && !command.startsWith("atma")) {
+                MainActivity.toast(MainActivity.TOAST_ELM, "Timeout on [" + command + "] [" + readBuffer.toString().replace("\r", "<cr>").replace(" ", "<sp>") + "]");
+            }
             MainActivity.debug("ELM327: sendAndWaitForAnswer > timed out on [" + command + "] [" + readBuffer.toString().replace("\r", "<cr>").replace(" ", "<sp>") + "]");
             return ("");
         }
@@ -539,8 +539,9 @@ public class ELM327 extends Device {
             lastFreeFrameFilter = emlFilter;
         }
 
-        generalTimeout = (int) (frame.getInterval() * intervalMultiplicator + 50);
-        if (generalTimeout < MINIMUM_TIMEOUT) generalTimeout = MINIMUM_TIMEOUT;
+        // Generous timeout (minimum 350ms) to accommodate Bluetooth packetization
+        // and avoid false timeouts on broadcast free frames
+        generalTimeout = Math.max(350, (int) (frame.getInterval() * intervalMultiplicator + 200));
 
         // Send atma to read the broadcast line
         hexData = sendAndWaitForAnswer("atma", 0, false, 1, true);

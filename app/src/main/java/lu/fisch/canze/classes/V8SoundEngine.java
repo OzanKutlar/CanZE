@@ -83,10 +83,12 @@ public class V8SoundEngine {
     private double intakePhase = 0.0;
     private double regenModPhase = 0.0;
 
-    // Acoustic resonator filter memory
+    // Acoustic resonator and subsonic high-pass filter memory
     private double bank1Filter = 0.0;
     private double bank2Filter = 0.0;
     private double exhaustBodyFilter = 0.0;
+    private double highPassIn = 0.0;
+    private double highPassOut = 0.0;
 
     private EngineListener engineListener;
 
@@ -139,6 +141,10 @@ public class V8SoundEngine {
                 bufSize,
                 AudioTrack.MODE_STREAM
         );
+        try {
+            audioTrack.setStereoVolume(1.0f, 1.0f);
+        } catch (Exception ignored) {
+        }
 
         audioTrack.play();
 
@@ -186,19 +192,18 @@ public class V8SoundEngine {
             // 1 crank rev = 2 * PI radians, RPM = revs per min
             double crankRadPerSample = (rpm / 60.0) * (2.0 * Math.PI) / SAMPLE_RATE;
 
-            // Target master volume scaled for loud, clear acoustic presence (audible over road/wind/music)
+            // Acoustic envelope: Clean linear gain scaling without squashing
             float targetVolume;
             if (isMuted) {
                 targetVolume = 0.0f;
             } else {
-                // Boosted baseline: idle is crisp and punchy, throttle adds immediate bark
-                float baseVolume = (0.50f + (throttle * 0.28f)) * masterVolume;
+                float baseVolume = 0.55f + (throttle * 0.35f);
                 if (torque >= 0f) {
-                    float loadFactor = Math.min(1.0f, torque / 160.0f);
-                    targetVolume = baseVolume + (loadFactor * 0.50f * masterVolume);
+                    float loadFactor = Math.min(1.0f, torque / 150.0f);
+                    targetVolume = baseVolume + (loadFactor * 0.45f);
                 } else {
-                    float regenFactor = Math.min(1.0f, -torque / 130.0f);
-                    targetVolume = baseVolume + (regenFactor * 0.40f * masterVolume);
+                    float regenFactor = Math.min(1.0f, -torque / 120.0f);
+                    targetVolume = baseVolume + (regenFactor * 0.35f);
                 }
             }
 
@@ -264,16 +269,19 @@ public class V8SoundEngine {
                 exhaustBodyFilter += (exhaustMix - exhaustBodyFilter) * 0.16;
                 double exhaustSignal = exhaustMix + (exhaustBodyFilter * 0.45);
 
-                // Deep sub-octave rumble for high displacement feel (5.0L - 6.2L V8 body)
-                // All harmonics are integer multiples of the 4*PI cycle (0.5, 1.0, 1.5)
-                // to guarantee smooth C1 continuity across cycle wraps with zero buzz
-                double subRumble = Math.sin(crankPhase * 0.5) * 0.35 + Math.sin(crankPhase * 1.0) * 0.20;
-                exhaustSignal += subRumble;
+                // High-presence acoustic harmonics (120 Hz - 800 Hz range)
+                // Gives strong vocal body that cuts through cabin wind, road noise, and music
+                double bodyHarmonics = Math.sin(crankPhase * 1.0) * 0.40
+                        + Math.sin(crankPhase * 2.0) * 0.32
+                        + Math.sin(crankPhase * 3.0) * 0.18
+                        + Math.sin(crankPhase * 0.5) * 0.35;
+                exhaustSignal += bodyHarmonics;
 
-                // Throttle body Helmholtz induction roar (smoothly scaled by throttle)
+                // Throttle body Helmholtz induction roar (throaty growl on load)
                 if (throttle > 0.02f && torque > -10f) {
                     float throttleScale = Math.min(1.0f, (throttle - 0.02f) / 0.98f);
-                    double intakeRoar = Math.sin(intakePhase) * (throttleScale * 0.38);
+                    double intakeRoar = Math.sin(intakePhase) * (throttleScale * 0.45)
+                            + Math.sin(intakePhase * 2.0) * (throttleScale * 0.20);
                     exhaustSignal += intakeRoar;
                 }
 
@@ -286,15 +294,33 @@ public class V8SoundEngine {
                     exhaustSignal = (exhaustSignal * burbleMod) + (compressionTone * regenIntensity);
                 }
 
-                // Warm non-linear tube/combustion saturation (cubic / tanh soft overdrive)
-                double drive = 1.0 + (Math.max(0f, torque) / 130.0 * 1.5) + (throttle * 0.6);
-                double saturated = Math.tanh(exhaustSignal * drive * 0.85);
+                // 1. Subsonic High-Pass Filter (Cutoff ~35 Hz):
+                // Strips inaudible DC/sub-bass rumble that causes speaker cone pops and wastes headroom
+                double hpAlpha = 0.995; // 35 Hz high-pass at 44.1 kHz
+                highPassOut = hpAlpha * (highPassOut + exhaustSignal - highPassIn);
+                highPassIn = exhaustSignal;
+                double filteredSignal = highPassOut;
 
-                // Dynamic master scaling using soft analog tanh limiting into 16-bit PCM (max loudness without clipping)
-                double drivenSignal = saturated * smoothedVolume * smoothedShiftCut;
-                double finalSample = Math.tanh(drivenSignal * 1.35) * 32000.0;
-                if (finalSample > 32600.0) finalSample = 32600.0;
-                if (finalSample < -32600.0) finalSample = -32600.0;
+                // 2. Mild analog warmth drive (preserves musical dynamics, no square-wave distortion)
+                double drive = 1.0 + (Math.max(0f, torque) / 160.0 * 0.6) + (throttle * 0.35);
+                double warm = Math.tanh(filteredSignal * drive * 0.65);
+
+                // 3. Clean Master Volume Scaling (Linear clean gain from 0% up to 250%)
+                double rawGain = warm * smoothedVolume * smoothedShiftCut * masterVolume * 24000.0;
+
+                // 4. Transparent Soft-Knee Limiter:
+                // Loud and punchy across the entire volume range with zero digital clipping or popping
+                double finalSample;
+                if (rawGain > 24000.0) {
+                    finalSample = 24000.0 + 7500.0 * Math.tanh((rawGain - 24000.0) / 7500.0);
+                } else if (rawGain < -24000.0) {
+                    finalSample = -24000.0 + 7500.0 * Math.tanh((rawGain + 24000.0) / 7500.0);
+                } else {
+                    finalSample = rawGain;
+                }
+
+                if (finalSample > 32000.0) finalSample = 32000.0;
+                if (finalSample < -32000.0) finalSample = -32000.0;
 
                 buffer[i] = (short) finalSample;
             }
