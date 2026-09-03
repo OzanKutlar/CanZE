@@ -73,7 +73,7 @@ public class V8SoundEngine {
     private static final float[] GEAR_RATIOS = {3.45f, 2.15f, 1.52f, 1.12f, 0.86f, 0.68f};
     private static final float FINAL_DRIVE = 3.65f;
     private static final float WHEEL_CIRCUMFERENCE_M = 1.95f;
-    private static final float BASE_IDLE_RPM = 780f;
+    private static final float BASE_IDLE_RPM = 1000f;
     private static final float REDLINE_RPM = 6600f;
 
     // Minimum road speeds (km/h) required before upshifting into each gear [1->2 .. 5->6]
@@ -589,13 +589,13 @@ public class V8SoundEngine {
         if (currentGear == 0) currentGear = 1;
 
         // Progressive throttle-delayed upshift schedule:
-        // - Light throttle / steady cruise: shifts early (1,900 - 2,200 RPM)
-        // - Moderate throttle (30-50%): holds gear up to 3,200 - 4,200 RPM
+        // - Light throttle / steady cruise: shifts around 2,100 - 2,400 RPM
+        // - Moderate throttle (30-50%): holds gear up to 3,400 - 4,400 RPM
         // - Deep throttle (70-100%): holds gear all the way to 5,800 - 6,200 RPM before shifting
-        float baseUpshift = 2100f - (cruiseTimer * 400f);
+        float baseUpshift = 2400f - (cruiseTimer * 300f);
         float throttleDemand = Math.max(currentThrottle, effectiveLoad);
         float throttleAggression = (float) Math.pow(throttleDemand, 1.15);
-        float upshiftRpm = baseUpshift + (throttleAggression * 4100f);
+        float upshiftRpm = baseUpshift + (throttleAggression * 3900f);
         if (upshiftRpm > REDLINE_RPM - 400f) upshiftRpm = REDLINE_RPM - 400f;
 
         evaluateShift(wheelRpm, upshiftRpm);
@@ -637,11 +637,11 @@ public class V8SoundEngine {
 
         // 2. Deceleration Downshift (Anti-Stall only):
         // In an EV, downshifting for power is eliminated. Downshifts occur STRICTLY when
-        // coasting or braking (currentThrottle < 0.22f) as engine RPM drops near idle.
-        float downshiftRpm = 1150f;
+        // coasting or braking (currentThrottle < 0.22f) as engine RPM drops below 1500 RPM.
+        float downshiftRpm = 1500f;
         if (rawGearRpm < downshiftRpm && currentGear > 1 && currentThrottle < 0.22f) {
             float rpmAfterDownshift = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 2];
-            if (rpmAfterDownshift < upshiftRpm * 0.90f) {
+            if (rpmAfterDownshift < REDLINE_RPM - 1200f) {
                 currentGear--;
                 downshiftBlip = 180f;
                 shiftLockout = SHIFT_LOCKOUT_S;
