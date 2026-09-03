@@ -94,18 +94,28 @@ public class V8SoundEngine {
     private static final double PHASE_WRAP = TWO_PI * 100.0; // multiples of 0.65 stay continuous
 
     /**
-     * A four stroke V8 fires eight times per 720 degrees, which is four firings per crank
-     * revolution. Set to 2.0 to restore the previous (octave low) behaviour.
+     * Order of the sub-bass reinforcement oscillator, relative to crank revolutions.
+     *
+     * The physically correct value is 4.0 (a four stroke V8 fires eight times per 720 degrees,
+     * so four times per crank revolution). Do NOT "fix" this to 4.0. The oscillator is a pure
+     * sine, and at 4.0 it lands exactly on the firing fundamental the pulse train already
+     * produces (52 Hz at idle, 200 Hz at 3000 RPM), where a mathematically perfect tone tracking
+     * engine speed reads as unmistakably synthetic. At 2.0 it sits at or below the 22 Hz
+     * high-pass corner and contributes felt weight without ever being audible as a tone.
      */
-    private static final double SUB_BASS_ORDER = 4.0;
+    private static final double SUB_BASS_ORDER = 2.0;
 
-    // Acoustic delay lines. The two banks MUST use different offsets: a delay common to both
-    // banks before a summing point is inaudible, and the X-pipe crossover coefficients cancel
-    // algebraically in mono unless the crossover path carries its own extra delay.
+    // Acoustic delay lines. The two banks use different offsets so the crossplane pulses arrive
+    // at the collector in a staggered pattern; a delay common to both banks before a summing
+    // point would be pure latency.
+    //
+    // There is deliberately no second "crossover" tap here. Feeding the same bank into the sum
+    // twice at two different delays builds a fixed feedforward comb (notches at 44100/(2*d) Hz
+    // and its odd multiples) which, because it does not move with RPM, colours the whole engine
+    // with a static metallic resonance.
     private static final int DELAY_LEN = 256;
-    private static final int BANK1_DELAY = 48;      // ~1.09 ms
-    private static final int BANK2_DELAY = 88;      // ~2.00 ms
-    private static final int CROSSOVER_DELAY = 62;  // ~1.41 ms extra through the X-pipe
+    private static final int BANK1_DELAY = 48; // ~1.09 ms
+    private static final int BANK2_DELAY = 88; // ~2.00 ms
     private final double[] bank1Delay = new double[DELAY_LEN];
     private final double[] bank2Delay = new double[DELAY_LEN];
     private int delayWrite = 0;
@@ -180,8 +190,6 @@ public class V8SoundEngine {
     // Acoustic filter states
     private double bank1Lp = 0.0;
     private double bank2Lp = 0.0;
-    private double cross1Lp = 0.0;
-    private double cross2Lp = 0.0;
     private double mufflerLp = 0.0;
     private double bodyResonator = 0.0;
     private double hpIn = 0.0;
@@ -393,25 +401,20 @@ public class V8SoundEngine {
             bank1Raw *= pulseAmplitude;
             bank2Raw *= pulseAmplitude;
 
-            // 2. Header tube propagation, different length per bank plus a longer crossover path
+            // 2. Header tube propagation, different primary length per bank
             bank1Delay[delayWrite] = bank1Raw;
             bank2Delay[delayWrite] = bank2Raw;
             double b1Direct = readDelay(bank1Delay, BANK1_DELAY);
             double b2Direct = readDelay(bank2Delay, BANK2_DELAY);
-            double b1Cross = readDelay(bank1Delay, BANK1_DELAY + CROSSOVER_DELAY);
-            double b2Cross = readDelay(bank2Delay, BANK2_DELAY + CROSSOVER_DELAY);
             delayWrite++;
             if (delayWrite >= DELAY_LEN) delayWrite = 0;
 
             // 3. Exhaust manifold acoustic low-pass (rolls off harsh content above ~950 Hz)
             bank1Lp += (b1Direct - bank1Lp) * 0.14;
             bank2Lp += (b2Direct - bank2Lp) * 0.14;
-            cross1Lp += (b1Cross - cross1Lp) * 0.14;
-            cross2Lp += (b2Cross - cross2Lp) * 0.14;
 
-            // 4. X-pipe: 0.5 * [(0.75*b1 + 0.25*b2cross) + (0.75*b2 + 0.25*b1cross)].
-            //    Unity DC gain, same as the old 0.5*(b1+b2), but the crossover no longer cancels.
-            double exhaustMix = 0.375 * (bank1Lp + bank2Lp) + 0.125 * (cross1Lp + cross2Lp);
+            // 4. Collector: the banks merge into one pipe. Unity DC gain.
+            double exhaustMix = 0.5 * (bank1Lp + bank2Lp);
 
             // 5. Muffler cavity resonance
             bodyResonator += (exhaustMix - bodyResonator) * 0.035;
@@ -429,14 +432,15 @@ public class V8SoundEngine {
             double driven = hpOut * drive;
             double warmed = driven / (1.0 + Math.abs(driven) * 0.38);
 
-            // 9. Character stage at unity full scale, then master volume, then PCM scaling.
-            //    Applying master AFTER the knee and clip is what makes the slider linear: it used
-            //    to sit before a hard clamp that the signal was already 1.7x over at idle, so the
-            //    top half of the slider travel did nothing at all.
-            double shaped = warmed * smoothedVolume * smoothedShiftCut * INTERNAL_DRIVE;
+            // 9. Master volume goes BEFORE the knee, so the tanh curve keeps saturating softly at
+            //    every slider position. Applying it after the knee meant the knee output was
+            //    already pinned at unity, and anything above 100% then hard clipped into a square
+            //    wave (a full stack of odd harmonics, i.e. buzz) instead of saturating.
+            double shaped = warmed * smoothedVolume * smoothedShiftCut
+                    * smoothedMasterVolume * INTERNAL_DRIVE;
             shaped = softKnee(shaped);
 
-            double out = shaped * smoothedMasterVolume * PCM_FULL_SCALE;
+            double out = shaped * PCM_FULL_SCALE;
             if (out > PCM_HARD_CLAMP) out = PCM_HARD_CLAMP;
             if (out < -PCM_HARD_CLAMP) out = -PCM_HARD_CLAMP;
 

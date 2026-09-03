@@ -65,7 +65,22 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     private TextView tvVolumeVal;
     private static final String PREF_KEY_V8_VOLUME = "v8_master_volume";
 
-    // Test simulation state (20% throttle)
+    // ---- Test drive vehicle model ----
+    // Tractive effort from a field-weakened EV motor curve against rolling and aerodynamic road
+    // load, so terminal speed emerges from the throttle position rather than being scripted.
+    private static final float SIM_DT = 0.05f;              // handler period, seconds
+    private static final float SIM_MASS_KG = 1500f;
+    private static final float SIM_WHEEL_RADIUS_M = 0.31f;  // matches the 1.95 m circumference
+    private static final float SIM_DRIVE_RATIO = 9.3f;      // single speed reduction
+    private static final float SIM_MAX_TORQUE_NM = 220f;
+    private static final float SIM_BASE_SPEED_KMH = 45f;    // constant power above this
+    private static final float SIM_ROLLING_N = 162f;        // m*g*Crr
+    private static final float SIM_DRAG_N_PER_MS2 = 0.38f;  // 0.5*rho*Cd*A
+    private static final float SIM_REGEN_TORQUE_NM = 55f;
+    private static final float SIM_MAX_SPEED_KMH = 180f;
+    private static final float SIM_DEFAULT_THROTTLE = 20f;
+
+    // Test simulation state
     private boolean isTestRunning = false;
     private boolean isTestStopping = false;
     private final android.os.Handler testHandler = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -73,6 +88,10 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     private float simDriveSpeed = 0f;
     private float simDrivePedal = 0f;
     private float simDriveTorque = 0f;
+
+    private SeekBar sbTestThrottle;
+    private TextView tvTestThrottleVal;
+    private volatile float testThrottleTarget = SIM_DEFAULT_THROTTLE;
 
     private View cardSimulator;
     private SeekBar sbSimSpeed;
@@ -142,6 +161,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
         });
 
         initVolumeControls();
+        initTestThrottleControl();
         initSimulatorPanel();
         animateEntrance();
     }
@@ -182,6 +202,71 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {}
         });
+    }
+
+    /**
+     * Wires the live test throttle slider. Reading it every simulation step is what lets the
+     * pedal be changed mid-test and have torque, acceleration and terminal speed all follow.
+     */
+    private void initTestThrottleControl() {
+        sbTestThrottle = findViewById(R.id.sb_test_throttle);
+        tvTestThrottleVal = findViewById(R.id.tv_test_throttle_val);
+        if (sbTestThrottle == null || tvTestThrottleVal == null) return;
+
+        sbTestThrottle.setProgress((int) SIM_DEFAULT_THROTTLE);
+        tvTestThrottleVal.setText(String.format(Locale.getDefault(), "%.0f %%", SIM_DEFAULT_THROTTLE));
+
+        sbTestThrottle.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                testThrottleTarget = progress;
+                tvTestThrottleVal.setText(String.format(Locale.getDefault(), "%d %%", progress));
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {}
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+    }
+
+    /**
+     * Advances the test vehicle by one SIM_DT step. Updates simDrivePedal, simDriveTorque and
+     * simDriveSpeed in place.
+     */
+    private void stepTestPhysics() {
+        // Driver foot travel, not an instant step
+        simDrivePedal += (testThrottleTarget - simDrivePedal) * 0.25f;
+        float pedal = Math.max(0f, Math.min(1f, simDrivePedal / 100f));
+
+        float speedMs = simDriveSpeed / 3.6f;
+
+        // Constant torque up to base speed, constant power above it (field weakening)
+        float availableTorque = SIM_MAX_TORQUE_NM;
+        if (simDriveSpeed > SIM_BASE_SPEED_KMH) {
+            availableTorque = SIM_MAX_TORQUE_NM * SIM_BASE_SPEED_KMH / simDriveSpeed;
+        }
+
+        float demandedTorque;
+        if (pedal < 0.03f) {
+            // Lift off: regen braking, fading out as the car comes to rest
+            float fade = Math.min(1f, simDriveSpeed / 12f);
+            demandedTorque = -SIM_REGEN_TORQUE_NM * fade;
+        } else {
+            demandedTorque = pedal * availableTorque;
+        }
+        simDriveTorque += (demandedTorque - simDriveTorque) * 0.25f;
+
+        float tractiveN = simDriveTorque * SIM_DRIVE_RATIO / SIM_WHEEL_RADIUS_M;
+        float resistiveN = SIM_ROLLING_N + SIM_DRAG_N_PER_MS2 * speedMs * speedMs;
+        float accelMs2 = (tractiveN - resistiveN) / SIM_MASS_KG;
+
+        speedMs += accelMs2 * SIM_DT;
+        if (speedMs < 0f) speedMs = 0f;
+
+        simDriveSpeed = speedMs * 3.6f;
+        if (simDriveSpeed > SIM_MAX_SPEED_KMH) simDriveSpeed = SIM_MAX_SPEED_KMH;
     }
 
     private void initSimulatorPanel() {
@@ -267,25 +352,13 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
                         simDriveTorque = 0f;
                         isTestStopping = false;
                         if (btnTestDrive != null) {
-                            btnTestDrive.setText("▶ TEST (20%)");
+                            btnTestDrive.setText("▶ TEST DRIVE");
                             btnTestDrive.setTextColor(0xFFFFD600); // Yellow when idle
                         }
                     }
                 } else {
-                    // Active Acceleration to 20% pedal
-                    simDrivePedal += (20.0f - simDrivePedal) * 0.08f;
-
-                    if (simDriveSpeed < 105.0f) {
-                        simDriveSpeed += 0.32f; // 20% acceleration builds cleanly past 100 km/h
-                        // Realistic EV motor torque under 20% pedal: ~115 Nm at launch tapering to ~48 Nm
-                        float targetTorque = 115.0f - (simDriveSpeed / 105.0f * 67.0f);
-                        simDriveTorque += (targetTorque - simDriveTorque) * 0.10f;
-                    } else {
-                        // Steady-State 105 km/h Highway Cruise:
-                        // Road load settles to highway maintenance (~22 Nm)
-                        float cruiseTorque = 22.0f;
-                        simDriveTorque += (cruiseTorque - simDriveTorque) * 0.08f;
-                    }
+                    // Live throttle: read the slider every step so the pedal can be moved mid-test
+                    stepTestPhysics();
                 }
 
                 updateSpeed(simDriveSpeed);
@@ -312,6 +385,9 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
                     simDriveSpeed = 0f;
                     simDrivePedal = 0f;
                     simDriveTorque = 0f;
+                    if (sbTestThrottle != null) {
+                        testThrottleTarget = sbTestThrottle.getProgress();
+                    }
                     btnTestDrive.setText("⏹ STOP TEST");
                     btnTestDrive.setTextColor(0xFFFF5252); // Red when active
                     testHandler.post(testRunnable);
@@ -337,7 +413,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
         isTestStopping = false;
         testHandler.removeCallbacks(testRunnable);
         if (btnTestDrive != null) {
-            btnTestDrive.setText("▶ TEST (20%)");
+            btnTestDrive.setText("▶ TEST DRIVE");
             btnTestDrive.setTextColor(0xFFFFD600);
         }
         updatePedal(0f);
@@ -375,7 +451,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     }
 
     private void animateEntrance() {
-        int[] cardIds = {R.id.card_volume, R.id.card_tachometer, R.id.card_speed, R.id.card_pedal, R.id.card_torque, R.id.card_simulator};
+        int[] cardIds = {R.id.card_volume, R.id.card_test_throttle, R.id.card_tachometer, R.id.card_speed, R.id.card_pedal, R.id.card_torque, R.id.card_simulator};
         long delay = 50;
         for (int id : cardIds) {
             final android.view.View v = findViewById(id);
