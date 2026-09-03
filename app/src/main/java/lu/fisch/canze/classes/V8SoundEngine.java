@@ -88,11 +88,11 @@ public class V8SoundEngine {
     private static final float STATIONARY_TORQUE_NM = 5f;
 
     // Physical flywheel torque integration in neutral (dOmega/dt = T_net / J).
-    // Zero load means any positive throttle accelerates the crankshaft continuously upward
-    // until the rev limiter, with rise rate proportional to pedal depth.
+    // Zero load means positive throttle accelerates the heavy crank continuously upward.
+    // On lift-off, large V8 rotational inertia results in a smooth ~3.2s decel with rev-hang.
     private static final float NEUTRAL_REV_CEILING_RPM = 5200f;
-    private static final float REV_DRIVE_ACCEL_RPM_S = 6800f; // Max full-throttle angular acceleration
-    private static final float REV_NATURAL_DECEL_RPM_S = 2200f; // Engine braking & friction on lift-off
+    private static final float REV_DRIVE_ACCEL_RPM_S = 6800f;  // Max full-throttle angular acceleration
+    private static final float REV_NATURAL_DECEL_RPM_S = 1150f; // Heavy flywheel decel rate (~3.2s from 5000 -> 780 RPM)
 
     // Minimum road speeds (km/h) required before upshifting into each gear [1->2 .. 5->6]
     private static final float[] MIN_UPSHIFT_SPEEDS = {0f, 28f, 50f, 70f, 88f, 99f};
@@ -634,13 +634,12 @@ public class V8SoundEngine {
         float throttle = currentThrottle;
 
         if (throttle > 0.04f) {
-            // Engine drive torque accelerates the crank:
-            // Light throttle (20-30%) builds revs steadily; heavy throttle (80-100%) screams upward
+            // Positive Combustion Drive Torque:
             float throttleEffort = (float) Math.pow(throttle, 1.25);
             float driveAccel = throttleEffort * REV_DRIVE_ACCEL_RPM_S;
 
-            // Internal rotational friction grows with RPM (opposing torque)
-            float internalFriction = (currentRpm / NEUTRAL_REV_CEILING_RPM) * (REV_DRIVE_ACCEL_RPM_S * 0.25f);
+            // Internal mechanical friction grows with speed
+            float internalFriction = (currentRpm / NEUTRAL_REV_CEILING_RPM) * (REV_DRIVE_ACCEL_RPM_S * 0.22f);
             float netRpmAccel = driveAccel - internalFriction;
 
             // Soft rev-limiter governor near ceiling
@@ -651,13 +650,17 @@ public class V8SoundEngine {
 
             currentRpm += netRpmAccel * FRAME_DT;
 
-            // Subtle rev-limiter bounce/flutter when pinned at the ceiling
+            // Subtle rev-limiter bounce/flutter when pinned at ceiling
             if (currentRpm >= NEUTRAL_REV_CEILING_RPM) {
                 currentRpm = NEUTRAL_REV_CEILING_RPM - (float) (Math.sin(cruiseWanderPhase1 * 4.0) * 35.0);
             }
         } else {
-            // Lift-off: Natural engine friction and pumping loss decels revs back to idle
-            float decelRate = REV_NATURAL_DECEL_RPM_S * (1.0f + (currentRpm / NEUTRAL_REV_CEILING_RPM) * 0.5f);
+            // Lift-Off: Heavy V8 flywheel inertia and closed-throttle pumping deceleration.
+            // As RPM approaches idle (1400 -> 780 RPM), decel rate softly cushions into the lope.
+            float idleProximity = Math.max(0.0f, Math.min(1.0f, (currentRpm - BASE_IDLE_RPM) / 650.0f));
+            float decelCushion = 0.50f + (idleProximity * 0.50f); // 50% gentler landing near idle
+
+            float decelRate = REV_NATURAL_DECEL_RPM_S * (1.0f + (currentRpm / NEUTRAL_REV_CEILING_RPM) * 0.4f) * decelCushion;
             currentRpm -= decelRate * FRAME_DT;
         }
 
