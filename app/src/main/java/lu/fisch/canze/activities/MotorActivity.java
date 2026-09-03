@@ -155,7 +155,9 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
                 updateSpeed(simSpeed);
                 updatePedal(simPedal);
                 updateTorque(simTorque);
-                soundEngine.setInputs(simSpeed, simPedal, simTorque);
+                if (soundEngine != null) {
+                    soundEngine.setInputs(simSpeed, simPedal, simTorque);
+                }
             }
 
             @Override
@@ -236,16 +238,16 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
                 switch (sid) {
                     case SID_RealSpeed:
                         updateSpeed((float) rawVal);
-                        soundEngine.setInputs(lastSpeed, lastPedal, lastTorque);
                         break;
                     case SID_Pedal:
                         updatePedal((float) rawVal);
-                        soundEngine.setInputs(lastSpeed, lastPedal, lastTorque);
                         break;
                     case SID_MeanEffectiveTorque:
                         updateTorque((float) rawVal);
-                        soundEngine.setInputs(lastSpeed, lastPedal, lastTorque);
                         break;
+                }
+                if (soundEngine != null) {
+                    soundEngine.setInputs(lastSpeed, lastPedal, lastTorque);
                 }
             }
         });
