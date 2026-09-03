@@ -191,6 +191,10 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        Field pedalField = MainActivity.fields.getBySID(SID_Pedal);
+        if (pedalField != null) {
+            pedalField.removeListener(this);
+        }
         if (soundEngine != null) {
             soundEngine.stop();
         }
@@ -218,10 +222,16 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
 
     @Override
     protected void initListeners() {
-        // Poll as fast as possible (INTERVAL_ASAPFAST = -1) so updates stream near real-time
-        addField(SID_Pedal, Device.INTERVAL_ASAPFAST, R.id.tv_pedal_val);
+        // Frame 186 contains both MeanEffectiveTorque (186.16) and Pedal (186.40).
+        // Querying SID_MeanEffectiveTorque and SID_RealSpeed (5D7.0) at INTERVAL_ASAPFAST
+        // gives maximal throughput, while SID_Pedal receives updates on the exact same 186 packet.
         addField(SID_MeanEffectiveTorque, Device.INTERVAL_ASAPFAST, R.id.tv_torque_val);
         addField(SID_RealSpeed, Device.INTERVAL_ASAPFAST, R.id.tv_speed_val);
+
+        Field pedalField = MainActivity.fields.getBySID(SID_Pedal);
+        if (pedalField != null) {
+            pedalField.addListener(this);
+        }
     }
 
     @Override

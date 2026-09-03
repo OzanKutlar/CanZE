@@ -58,6 +58,7 @@ public class ELM327 extends Device {
      */
     private int lastId = 0;
     private boolean lastCommandWasFreeFrame = false;
+    private String lastFreeFrameFilter = "";
 
 
     protected boolean initDevice(int toughness, int retries) {
@@ -197,13 +198,21 @@ public class ELM327 extends Device {
         // atsp6        (CAN 500K 11 bit) ==> might need to change that if we want to support
         //               pin re-assignment to ie the MM bus
 
-        String[] commands = "ate0;ats0;ath0;atl0;atal;atcaf0;atfcsh77b;atfcsd300000;atfcsm1;atsp6".split(";");
+        // Clean CAN initialization sequence:
+        // Note: 'atal' has been removed as it is an ISO9141-only command that CAN does not use,
+        // and it causes many ELM327 v1.5/v2.1 clones to freeze or time out.
+        String[] commands = "ate0;ats0;ath0;atl0;atcaf0;atfcsh77b;atfcsd300000;atfcsm1;atsp6".split(";");
 
         boolean first = true;
         for (String command : commands) {
             if (!initCommandExpectOk(command, first)) {
-                lastInitProblem = command + " command problem";
-                return deviceIsInitialized;
+                // Non-critical commands (like flow control modes on certain clones) should not crash the connection
+                if (command.startsWith("atfc")) {
+                    MainActivity.debug("ELM327: optional command " + command + " failed, continuing anyway");
+                } else {
+                    lastInitProblem = command + " command problem";
+                    return deviceIsInitialized;
+                }
             }
             first = false;
         }
@@ -281,6 +290,10 @@ public class ELM327 extends Device {
                     if (count-- == 0) return false;
                 }
             } else {
+                // Fast check: if nothing is pending in the input buffer, there's nothing to flush
+                if (BluetoothManager.getInstance().isConnected() && BluetoothManager.getInstance().available() == 0 && eom == '>') {
+                    return true;
+                }
                 long end = Calendar.getInstance().getTimeInMillis() + timeout;
                 while (Calendar.getInstance().getTimeInMillis() < end) {
                     // read a byte
@@ -291,13 +304,12 @@ public class ELM327 extends Device {
                             int c = BluetoothManager.getInstance().read();
                             if (c == (int) eom) return true;
                             if (count-- == 0) return false;
-
                         }
                         // restart the timer
                         end = Calendar.getInstance().getTimeInMillis() + timeout;
                     } else {
                         // let the system breath if there was no data
-                        Thread.sleep(5);
+                        Thread.sleep(2);
                     }
                 }
             }
@@ -438,9 +450,9 @@ public class ELM327 extends Device {
 
                     }
                 } else {
-                    // let the system breath if there was no data
+                    // Minimal sleep to process incoming bytes as fast as possible
                     try {
-                        Thread.sleep(10);
+                        Thread.sleep(2);
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                     }
@@ -485,7 +497,6 @@ public class ELM327 extends Device {
         super.clearFields();
         //fieldIndex=0;
     }
-
     @Override
     public Message requestFreeFrame(Frame frame) {
 
@@ -498,29 +509,28 @@ public class ELM327 extends Device {
         // ensure the ATCRA filter is reset in the next NON free frame request
         lastCommandWasFreeFrame = true;
 
-        // EML needs the filter to be 3 symbols and contains the from CAN id of the ECU. getHexId resturns 3 chars
-        String emlFilter = frame.getHexId();
+        // Filter is the 3-character hex CAN ID
+        String emlFilter = frame.getHexId().toLowerCase();
 
-        MainActivity.debug("ELM327: requestFreeFrame: atcra" + emlFilter);
-        if (!initCommandExpectOk("atcra" + emlFilter))
-            return new Message(frame, "-E-Problem sending atcra command", true);
+        // PERFORMANCE OPTIMIZATION: Only send atcra if the filter actually changed
+        if (!emlFilter.equals(lastFreeFrameFilter)) {
+            MainActivity.debug("ELM327: requestFreeFrame: atcra" + emlFilter);
+            if (!initCommandExpectOk("atcra" + emlFilter)) {
+                lastFreeFrameFilter = "";
+                return new Message(frame, "-E-Problem sending atcra command", true);
+            }
+            lastFreeFrameFilter = emlFilter;
+        }
 
-        //sendAndWaitForAnswer("atcra" + emlFilter, 400);
-        // atma     (wait for one answer line)
         generalTimeout = (int) (frame.getInterval() * intervalMultiplicator + 50);
         if (generalTimeout < MINIMUM_TIMEOUT) generalTimeout = MINIMUM_TIMEOUT;
-        MainActivity.debug("ELM327: requestFreeFrame > TIMEOUT = " + generalTimeout);
 
-        // 10 ms plus repeat time timeout, do not wait until empty, do not count lines, add \r to command
-        hexData = sendAndWaitForAnswer("atma", frame.getInterval() + 10);
+        // Send atma to read the broadcast line
+        hexData = sendAndWaitForAnswer("atma", 0, false, 1, true);
 
-        MainActivity.debug("ELM327: requestFreeFrame > hexData = [" + hexData + "]");
-        // the dongle starts babbling now. sendAndWaitForAnswer should stop at the first full line
-        // ensure any running operation is stopped
-        // sending a return might restart the last command. Bad plan.
+        // Immediately stop atma monitor
         sendNoWait("x");
-        // let it settle down, the ELM should indicate STOPPED then prompt >
-        flushWithTimeout(100, '>');
+        flushWithTimeout(50, '>');
         generalTimeout = DEFAULT_TIMEOUT;
 
         // atar     (clear filter)
@@ -550,7 +560,7 @@ public class ELM327 extends Device {
 
         // PERFORMANCE ENHANCEMENT: only send ATAR if coming from a free frame
         if (lastCommandWasFreeFrame) {
-            // atar     (clear filter set by free frame capture method)
+            lastFreeFrameFilter = "";
             if (!initCommandExpectOk("atar")) {
                 return new Message(frame, "-E-Problem sending atar command", true);
             }
