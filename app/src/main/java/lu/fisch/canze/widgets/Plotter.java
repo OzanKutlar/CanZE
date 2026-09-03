@@ -90,207 +90,122 @@ public class Plotter extends Drawable {
 
     @Override
     public void draw(Graphics g) {
-        // modern dark card background
-        g.setColor(getBackground());
-        g.fillRect(x, y, width, height);
+        // Draw sleek modern card container window
+        drawModernWindowCard(g, 4);
 
-        // subtle border
-        g.setColor(new Color(38, 51, 70));
-        g.drawRect(x, y, width, height);
+        int inset = 6;
+        int padTop = 40;
+        int padBottom = 22;
+        int padSide = 18;
 
-        // calculate fill height
-        int fillHeight = (int) ((value-min)/(double)(max-min)*(height-1));
-        int barWidth = width-Math.max(g.stringWidth(min+""),g.stringWidth(max+""))-10-10;
-        int spaceAlt = Math.max(g.stringWidth(minAlt+""),g.stringWidth(maxAlt+""))+10+10;
-        // reduce with if second y-axe is used
-        if (minAlt==-1 && maxAlt==-1)
-        {
-            spaceAlt=0;
-        }
-        barWidth-=spaceAlt;
+        int graphX = x + inset + padSide;
+        int graphY = y + inset + padTop;
+        int graphW = width - 2 * inset - 2 * padSide;
+        int graphH = height - 2 * inset - padTop - padBottom;
 
-        // what is the graph height
-        SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss");
-        int graphHeight = height-g.stringHeight(sdf.format(Calendar.getInstance().getTime()))-5;
+        if (graphW <= 10 || graphH <= 10) return;
 
-        // draw the ticks
-        if(minorTicks>0 || majorTicks>0)
-        {
-            int toTicks = minorTicks;
-            if(toTicks==0) toTicks=majorTicks;
-            double accel = (double)height/((max-min)/(double)toTicks);
-            double ax,ay,bx,by;
-            int actual = min;
-            int sum = 0;
-            for(double i=height; i>=0; i-=accel)
-            {
-                if(minorTicks>0)
-                {
-                    g.setColor(new Color(50, 65, 88));
-                    ax = x+width-barWidth-5;
-                    ay = y+i;
-                    bx = x+width-barWidth;
-                    by = y+i;
-                    g.drawLine((int)ax, (int)ay, (int)bx, (int)by);
-                }
-                // draw majorTicks
-                if(majorTicks!=0 && sum % majorTicks == 0) {
-                    if(majorTicks>0)
-                    {
-                        g.setColor(new Color(28, 38, 56)); // subtle grid
-                        ax = x+width-barWidth-10;
-                        ay = y+i;
-                        bx = x+width;
-                        by = y+i;
-                        g.drawLine((int)ax, (int)ay, (int)bx, (int)by);
-
-                        g.setColor(new Color(50, 65, 88));
-                        ax = x+width-barWidth-10;
-                        ay = y+i;
-                        bx = x+width-barWidth;
-                        by = y+i;
-                        g.drawLine((int)ax, (int)ay, (int)bx, (int)by);
-                    }
-
-                    // draw String
-                    if(showLabels)
-                    {
-                        g.setColor(new Color(138, 153, 173));
-                        String text = (actual)+"";
-                        double sw = g.stringWidth(text);
-                        bx = x+width-barWidth-16-sw;
-                        by = y+i;
-                        g.drawString(text, (int)(bx), (int)(by+g.stringHeight(text)*(1-i/height)));
-                    }
-
-                    actual+=majorTicks;
-                }
-                sum+=minorTicks;
+        // Compute pack min, max, delta statistics across all values
+        double valMin = Double.MAX_VALUE;
+        double valMax = -Double.MAX_VALUE;
+        int validCount = 0;
+        for (int i = 0; i < values.size(); i++) {
+            Double d = values.get(i);
+            if (d != null && !Double.isNaN(d) && d > 0) {
+                if (d < valMin) valMin = d;
+                if (d > valMax) valMax = d;
+                validCount++;
             }
         }
 
-        // draw the horizontal grid
-        /*
-        g.setColor(getIntermediate());
-        long start = Calendar.getInstance().getTimeInMillis()/1000;
-        int interval = 60/timeSale;
-        for(long x=width-(start%interval)-spaceAlt; x>=width-barWidth-spaceAlt; x-=interval)
-        {
-            g.drawLine(x, 1, x, graphHeight + 5);
-        }
-        */
+        // Header: Title with glowing neon dot
+        int titleX = x + inset + 14;
+        int titleY = y + inset + 22;
+        g.setTextSize(11);
+        Color dotCol = isFieldSkipped() ? new Color(204, 0, 0) : new Color(0, 229, 255);
+        g.setColor(dotCol);
+        g.fillRoundRect(titleX, titleY - 8, 8, 8, 4, 4);
 
-        /*
-        MainActivity.debug("Values "+values.size());
-        MainActivity.debug("Values min "+minValues.size());
-        MainActivity.debug("Values max "+maxValues.size());/**/
+        g.setColor(new Color(255, 255, 255));
+        String cleanTitle = (title != null && !title.isEmpty()) ? title.toUpperCase() : "PACK TELEMETRY";
+        g.drawString(cleanTitle, titleX + 14, titleY);
 
-        // inner graph box
-        g.setColor(new Color(38, 51, 70));
-        g.drawRect(x+width-barWidth, y, barWidth, height);
-        // min & max
-        /*
-        if(minValues.size()>0)
-        {
-            double w = (double) barWidth/minValues.size();
-            double h = (double) getHeight()/(getMax()-getMin()+1);
-
-            double lastX = Double.NaN;
-            double lastY = Double.NaN;
-            g.setColor(Color.GREEN_DARK);
-            for(int i=0; i<minValues.size(); i++)
-            {
-                double mx = w/2+i*w;
-                double my = getHeight()-(minValues.get(i)-getMin())*h;
-                if(minValues.get(i)==getMin())
-                    my = getHeight()-(values.get(i)-getMin())*h;
-                int rayon = 2;
-                g.fillOval(getX()+getWidth()-barWidth+(int)mx-rayon,getY()+(int)my-rayon,2*rayon+1,2*rayon+1);
-                if(i>0)
-                {
-                    g.drawLine(getX()+getWidth()-barWidth+(int)lastX,
-                            getY()+(int)lastY,
-                            getX()+getWidth()-barWidth+(int)mx,
-                            getY()+(int)my);
-                }
-                lastX=mx;
-                lastY=my;
+        // Pack statistics badge pill (top right): e.g. "MIN: 3.98V  MAX: 4.02V  Δ 14mV"
+        if (validCount > 0 && valMin != Double.MAX_VALUE && valMax != -Double.MAX_VALUE) {
+            double delta = valMax - valMin;
+            String statText;
+            if (valMax < 10.0) { // Cell voltage mode (V & mV)
+                statText = String.format(java.util.Locale.US, "MIN: %.2fV  MAX: %.2fV  Δ %.0fmV", valMin, valMax, delta * 1000.0);
+            } else { // Temperature mode (°C)
+                statText = String.format(java.util.Locale.US, "MIN: %.0f°C  MAX: %.0f°C  Δ %.0f°", valMin, valMax, delta);
             }
+            g.setTextSize(10);
+            int statW = g.stringWidth(statText);
+            int pillW = statW + 16;
+            int pillH = 18;
+            int pillX = x + width - inset - 14 - pillW;
+            int pillY = y + inset + 8;
+
+            g.setColor(new Color(24, 33, 49));
+            g.fillRoundRect(pillX, pillY, pillW, pillH, 9, 9);
+            g.setColor(new Color(38, 51, 74));
+            g.drawRoundRect(pillX, pillY, pillW, pillH, 9, 9);
+
+            g.setColor(delta > 0.040 && valMax < 10.0 ? new Color(255, 179, 0) : new Color(0, 229, 255));
+            g.drawString(statText, pillX + 8, pillY + 13);
         }
-        if(maxValues.size()>0)
-        {
-            double w = (double) barWidth/maxValues.size();
-            double h = (double) getHeight()/(getMax()-getMin()+1);
 
-            double lastX = Double.NaN;
-            double lastY = Double.NaN;
-            g.setColor(Color.BLUE);
-            for(int i=0; i<maxValues.size(); i++)
-            {
-                double mx = w/2+i*w;
-                double my = getHeight()-(maxValues.get(i)-getMin())*h;
-                int rayon = 2;
-                g.fillOval(getX()+getWidth()-barWidth+(int)mx-rayon,getY()+(int)my-rayon,2*rayon+1,2*rayon+1);
-                if(i>0)
-                {
-                    g.drawLine(getX()+getWidth()-barWidth+(int)lastX,
-                            getY()+(int)lastY,
-                            getX()+getWidth()-barWidth+(int)mx,
-                            getY()+(int)my);
-                }
-                lastX=mx;
-                lastY=my;
-            }
+        // Subtle horizontal guide lines
+        int lines = 3;
+        for (int l = 0; l <= lines; l++) {
+            int ly = graphY + (int) (graphH * (float) l / lines);
+            g.setColor(new Color(24, 33, 48));
+            g.drawLine(graphX, ly, graphX + graphW, ly);
         }
-        */
-        // values
-        //MainActivity.debug("PLOTTER SIZE: "+values.size());
-        if(values.size()>0)
-        {
-            double w = (double) barWidth/values.size();
-            double h = (double) getHeight()/(getMax()-getMin());
 
-            double barPadding = Math.max(1, w * 0.15);
-            int barDrawW = (int) Math.max(2, w - 2 * barPadding);
+        // Render Equalizer Cell Bars
+        if (values.size() > 0) {
+            double barSlotW = (double) graphW / values.size();
+            double h = (double) graphH / (getMax() - getMin());
+            double barPad = Math.max(0.5, barSlotW * 0.12);
+            int barW = Math.max(2, (int) (barSlotW - 2 * barPad));
 
-            Color barColor = isFieldSkipped() ? new Color(204, 0, 0) : new Color(0, 229, 255);
-            Color capColor = isFieldSkipped() ? new Color(255, 60, 60) : new Color(130, 245, 255);
+            Color normBarCol = isFieldSkipped() ? new Color(204, 0, 0) : new Color(0, 200, 255);
+            Color normCapCol = isFieldSkipped() ? new Color(255, 60, 60) : new Color(130, 245, 255);
+            Color warnBarCol = new Color(255, 153, 0);
+            Color warnCapCol = new Color(255, 214, 0);
 
-            for(int i=0; i<values.size(); i++)
-            {
+            for (int i = 0; i < values.size(); i++) {
                 try {
                     double val = values.get(i);
-                    if (Double.isNaN(val)) continue;
+                    if (Double.isNaN(val) || val <= 0) continue;
                     double barH = (val - getMin()) * h;
                     if (barH < 0) barH = 0;
-                    if (barH > getHeight()) barH = getHeight();
+                    if (barH > graphH) barH = graphH;
 
-                    int bx = getX() + getWidth() - barWidth + (int)(i * w + barPadding);
-                    int by = getY() + getHeight() - (int) barH;
+                    int bx = graphX + (int) (i * barSlotW + barPad);
+                    int by = graphY + graphH - (int) barH;
 
-                    // Draw modern sleek column bar
-                    g.setColor(barColor);
-                    g.fillRect(bx, by, barDrawW, (int) barH);
+                    boolean isImbalanced = (validCount > 1 && (valMax - val) > 0.035 && valMax < 10.0);
+                    Color bCol = isImbalanced ? warnBarCol : normBarCol;
+                    Color cCol = isImbalanced ? warnCapCol : normCapCol;
 
-                    // Illuminated cap on top of each cell bar
-                    g.setColor(capColor);
-                    g.fillRect(bx, by, barDrawW, Math.min(3, (int) barH));
-                } catch (IndexOutOfBoundsException | NullPointerException e) {
-                    /* simply ignore */
+                    // Sleek pill-column bar
+                    g.setColor(bCol);
+                    g.fillRoundRect(bx, by, barW, (int) barH, 3, 3);
+
+                    // Glowing top cap
+                    g.setColor(cCol);
+                    g.fillRoundRect(bx, by, barW, Math.min(3, (int) barH), 2, 2);
+                } catch (Exception e) {
+                    /* ignore */
                 }
             }
         }
 
-        // draw the title
-        if(title!=null && !title.equals(""))
-        {
-            g.setColor(getTitleColor());
-            g.setTextSize(18);
-            int th = g.stringHeight(title);
-            int tx = getX()+width-barWidth+8;
-            int ty = getY()+th+4;
-            g.drawString(title,tx,ty);
-        }
+        // Subtle bottom border baseline
+        g.setColor(new Color(38, 51, 70));
+        g.drawLine(graphX, graphY + graphH, graphX + graphW, graphY + graphH);
     }
 
     @Override

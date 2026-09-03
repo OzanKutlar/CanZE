@@ -65,13 +65,36 @@ public abstract class Drawable implements FieldListener {
     protected String title = "";
     protected int timeSale = 1;
 
-    // modern dark cockpit colors
+    // modern dark cockpit window styling
     protected Color foreground   = new Color(138, 153, 173); // #8A99AD slate
-    protected Color background   = new Color(22, 29, 43);    // #161D2B dark card
-    protected Color intermediate = new Color(31, 41, 61);    // #1F293D subtle grid
+    protected Color background   = new Color(17, 22, 34);    // #111622 deep card
+    protected Color intermediate = new Color(28, 38, 54);    // #1C2636 subtle grid
     protected Color titleColor   = new Color(0, 229, 255);   // #00E5FF neon cyan
 
     protected DrawSurfaceInterface drawSurface = null;
+
+    /**
+     * Draws a sleek modern window card container around the widget with rounded corners and border.
+     */
+    protected void drawModernWindowCard(Graphics g, int inset) {
+        float rx = 16f;
+        float ry = 16f;
+        int pad = inset;
+        int w = width - 2 * pad;
+        int h = height - 2 * pad;
+        if (w <= 0 || h <= 0) return;
+
+        // Card surface background
+        g.setColor(background);
+        g.fillRoundRect(x + pad, y + pad, w, h, (int) rx, (int) ry);
+
+        // Subtle luminous border
+        Color borderCol = isFieldSkipped() ? new Color(204, 0, 0) : new Color(33, 44, 62);
+        g.setColor(borderCol);
+        g.setStrokeWidth(1.5f);
+        g.drawRoundRect(x + pad, y + pad, w, h, (int) rx, (int) ry);
+        g.setStrokeWidth(1f);
+    }
 
     protected ArrayList<String> sids = new ArrayList<>();
     protected ColorRanges colorRanges = new ColorRanges();

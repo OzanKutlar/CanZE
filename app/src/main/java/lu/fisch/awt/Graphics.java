@@ -41,6 +41,27 @@ public class Graphics
 	{
 		this.canvas=canvas;
 		paint.setAntiAlias(true);
+		paint.setDither(true);
+		paint.setStrokeCap(Paint.Cap.ROUND);
+		paint.setStrokeJoin(Paint.Join.ROUND);
+	}
+
+	public void setStrokeWidth(float width)
+	{
+		paint.setStrokeWidth(width);
+	}
+
+	public void fillRoundRect(int x, int y, int width, int height, int rx, int ry)
+	{
+		fillRoundRect((float) x, (float) y, (float) width, (float) height, (float) rx, (float) ry);
+	}
+
+	public void fillRoundRect(float x, float y, float width, float height, float rx, float ry)
+	{
+		paint.setColor(color.getAndroidColor());
+		paint.setStyle(Paint.Style.FILL);
+		RectF rect = new RectF(x, y, x + width, y + height);
+		canvas.drawRoundRect(rect, rx, ry, paint);
 	}
 	
 	public Canvas getCanvas()
