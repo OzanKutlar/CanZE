@@ -188,6 +188,7 @@ public class V8SoundEngine {
     private void audioLoop() {
         short[] buffer = new short[BUFFER_SIZE];
         float smoothedVolume = 0.0f;
+        float smoothedMasterVolume = 0.0f;
 
         while (isRunning) {
             updateTransmission();
@@ -203,7 +204,7 @@ public class V8SoundEngine {
             // 4 cylinder fires per rev = 4th order harmonic of crank revs
             double firingOrderRadPerSample = crankRadPerSample * 2.0;
 
-            // Elevated baseline target volume for strong cabin presence
+            // Target internal dynamic volume (load and regen modulation)
             float targetVolume;
             if (isMuted) {
                 targetVolume = 0.0f;
@@ -214,6 +215,8 @@ public class V8SoundEngine {
                     targetVolume = Math.max(targetVolume, 0.90f);
                 }
             }
+
+            float targetMaster = isMuted ? 0.0f : masterVolume;
 
             for (int i = 0; i < BUFFER_SIZE; i++) {
                 // Advance crank phase across 720 degree cycle (4*PI)
@@ -229,8 +232,9 @@ public class V8SoundEngine {
 
                 smoothedVolume += (targetVolume - smoothedVolume) * 0.005f;
                 smoothedShiftCut += (targetShiftCut - smoothedShiftCut) * 0.008f;
+                smoothedMasterVolume += (targetMaster - smoothedMasterVolume) * 0.008f;
 
-                if (smoothedVolume < 0.001f) {
+                if (smoothedVolume < 0.001f || smoothedMasterVolume < 0.001f) {
                     buffer[i] = 0;
                     continue;
                 }
@@ -290,15 +294,16 @@ public class V8SoundEngine {
                 double driven = cleanSignal * drive;
                 double warmedSignal = driven / (1.0 + Math.abs(driven) * 0.38);
 
-                // 9. Full Dynamic Range Scaling (Peaking loud & clean near +/- 29,000)
-                double masterGain = warmedSignal * smoothedVolume * smoothedShiftCut * masterVolume * 29500.0;
+                // 9. Master Volume Scaling (3.8x louder baseline at 100% volume setting)
+                // Driven by smoothedMasterVolume so slider responds smoothly & immediately
+                double masterGain = warmedSignal * smoothedVolume * smoothedShiftCut * smoothedMasterVolume * 115000.0;
 
-                // Soft-knee safety limiter
+                // Transparent soft-knee limiter (preserves deep rumble without harsh clipping)
                 double finalSample;
-                if (masterGain > 27000.0) {
-                    finalSample = 27000.0 + 3500.0 * Math.tanh((masterGain - 27000.0) / 3500.0);
-                } else if (masterGain < -27000.0) {
-                    finalSample = -27000.0 + 3500.0 * Math.tanh((masterGain + 27000.0) / 3500.0);
+                if (masterGain > 27500.0) {
+                    finalSample = 27500.0 + 3500.0 * Math.tanh((masterGain - 27500.0) / 3500.0);
+                } else if (masterGain < -27500.0) {
+                    finalSample = -27500.0 + 3500.0 * Math.tanh((masterGain + 27500.0) / 3500.0);
                 } else {
                     finalSample = masterGain;
                 }
