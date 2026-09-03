@@ -1,5 +1,15 @@
 # CanZE
 
+## About This Fork
+
+This repository is a fork of the original CanZE project found at [https://github.com/fesch/CanZE](https://github.com/fesch/CanZE).
+
+This fork was made as the original app stopped supporting the Fluence ZE in 2019, and I wanted to use the existing functionalities and build some small features for myself.
+
+Note that this fork does not have any new features that the app can access, but is using the existing features of the app as a baseline to make fun projects for myself.
+
+---
+
 You have to read and agree to the informal warning and the formal disclaimer at the end of this readme.md file!
 
 CanZE is an Android App that allows you to read out some useful information out of your Renault ZE car (actually Zoe,
