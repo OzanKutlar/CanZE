@@ -65,7 +65,7 @@ public class V8SoundEngine {
     public static final int ENGINE_RUNNING = 1;
     public static final int ENGINE_STOPPING = 2;
 
-    private static final float STOP_TIME_S = 1.3f; // Smooth spin-down duration to 0 RPM
+    private static final float STOP_TIME_S = 2.2f; // Audible 2.2s flywheel wind-down duration
 
     // Virtual manual transmission gear ratios
     private static final float[] GEAR_RATIOS = {3.80f, 2.60f, 1.75f, 1.25f, 0.95f, 0.72f};
@@ -489,14 +489,16 @@ public class V8SoundEngine {
                 ((currentRpm * crankCycleFlutter) / 60.0) * TWO_PI / SAMPLE_RATE;
         final double firingRadPerSample = crankRadPerSample * SUB_BASS_ORDER;
 
-        // Fuelling combustion curve: smoothly ramps in on start, smoothly fades out on stop
+        // Fuelling combustion curve: keep pulses audible during shutdown so rev wind-down is clearly heard
         float combustion = 0f;
         if (engineState == ENGINE_RUNNING) {
             float startGain = Math.min(1.0f, stateTimer / 0.45f);
             combustion = (0.40f + load * 0.90f) * startGain;
         } else if (engineState == ENGINE_STOPPING) {
-            float stopGain = Math.max(0f, 1.0f - (stateTimer / STOP_TIME_S));
-            combustion = 0.35f * stopGain;
+            // Keep combustion at natural idle strength, gently tapering only in the final 15%
+            float progress = Math.min(1.0f, stateTimer / STOP_TIME_S);
+            float tail = (progress > 0.85f) ? (1.0f - progress) / 0.15f : 1.0f;
+            combustion = 0.40f * tail;
         }
 
         final float mix = edgeBiteIdle + load * (edgeBiteLoad - edgeBiteIdle);
@@ -590,24 +592,23 @@ public class V8SoundEngine {
         final float conv = CONV_MIN + effectiveLoad * (exhaustDepth - CONV_MIN);
         final float dryAmount = 1f - conv;
 
-        // Linearly drops the leveling target to 0 during shutdown so AGC never boosts the quiet tail
-        float stopFade = 1.0f;
-        if (engineState == ENGINE_STOPPING) {
-            stopFade = Math.max(0f, 1.0f - (stateTimer / STOP_TIME_S));
-        } else if (engineState == ENGINE_OFF) {
-            stopFade = 0f;
-        }
+        // Keep leveling target steady during shutdown so AGC does not collapse volume
+        leveling.setTarget(levelTarget * (1f - 0.45f * overrunAmount));
 
-        leveling.setTarget(levelTarget * (1f - 0.45f * overrunAmount) * stopFade);
+        // Master fade only in the final 15% of stopping for clean zero-crossing
+        float stopMaster = 1.0f;
+        if (engineState == ENGINE_STOPPING && stateTimer > STOP_TIME_S * 0.85f) {
+            stopMaster = Math.max(0f, (STOP_TIME_S - stateTimer) / (STOP_TIME_S * 0.15f));
+        }
 
         for (int i = 0; i < BUFFER_SIZE; i++) {
             float exhaust = conv * (wet[i] * 2.2f) + dryAmount * dry[i];
             float v = exhaust + direct[i];
 
-            v = leveling.f(v) * stopFade;
+            v = leveling.f(v);
             v = antiAlias.f(v);
 
-            double shaped = v * smoothedMasterVolume * INTERNAL_DRIVE;
+            double shaped = v * smoothedMasterVolume * INTERNAL_DRIVE * stopMaster;
             shaped = softKnee(shaped);
 
             double pcm = shaped * PCM_FULL_SCALE;
@@ -671,11 +672,11 @@ public class V8SoundEngine {
         currentGear = 0;
 
         float progress = Math.min(1.0f, stateTimer / STOP_TIME_S);
-        // Organic cosine ease decay from current RPM to 0
-        float decay = (float) Math.cos(progress * Math.PI * 0.5);
+        // Natural flywheel spin-down curve
+        float decay = (float) Math.pow(1.0f - progress, 1.6);
         currentRpm = stopBaseRpm * decay;
 
-        if (progress >= 1.0f || currentRpm <= 15f) {
+        if (progress >= 1.0f || currentRpm <= 20f) {
             currentRpm = 0f;
             stopBaseRpm = 0f;
             engineState = ENGINE_OFF;
