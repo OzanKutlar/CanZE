@@ -67,8 +67,8 @@ public class V8SoundEngine {
 
     private static final float STOP_TIME_S = 2.2f; // Audible 2.2s flywheel wind-down duration
 
-    // Virtual manual transmission gear ratios: 1st gear (9.65) hits ~3000 RPM at 10 km/h purely for launch
-    private static final float[] GEAR_RATIOS = {9.65f, 2.60f, 1.75f, 1.25f, 0.95f, 0.72f};
+    // Balanced 7-speed transmission with smooth 1.3-1.5x steps, cruising at ~1500-2500 RPM
+    private static final float[] GEAR_RATIOS = {4.85f, 3.15f, 2.10f, 1.45f, 1.05f, 0.80f, 0.62f};
     private static final float FINAL_DRIVE = 3.65f;
     private static final float REDLINE_RPM = 6600f;
 
@@ -80,7 +80,7 @@ public class V8SoundEngine {
 
     // Defaults for user-tunable parameters
     public static final float DEFAULT_IDLE_RPM = 780f;
-    public static final float DEFAULT_STALL_FLASH_RPM = 1850f;
+    public static final float DEFAULT_STALL_FLASH_RPM = 2100f;
     public static final float DEFAULT_SLIP_FADE_KMH = 24f;
     public static final float DEFAULT_UPSHIFT_BASE_RPM = 2200f;
     public static final float DEFAULT_EDGE_BITE_IDLE = 0.04f;
@@ -98,7 +98,7 @@ public class V8SoundEngine {
     private static final float LIMITER_CUT_DROP_RPM = 280f;
     private static final float LIMITER_CUT_DECEL_RPM_S = 4600f;
     private static final float LIMITER_CUT_MIN_TIME_S = 0.045f;
-    private static final float[] MIN_UPSHIFT_SPEEDS = {0f, 12f, 30f, 50f, 70f, 90f};
+    private static final float[] MIN_UPSHIFT_SPEEDS = {0f, 12f, 30f, 48f, 68f, 88f, 108f};
     private static final float SHIFT_LOCKOUT_S = 0.8f;
 
     private static final float CRUISE_ACCEL_THRESHOLD = 1.2f;
@@ -880,22 +880,28 @@ public class V8SoundEngine {
         if (shiftLockout > 0f) return;
 
         final float gearRpm = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 1];
+        final int maxGear = GEAR_RATIOS.length;
         final float minSpeedForNext =
-                (currentGear < 6) ? MIN_UPSHIFT_SPEEDS[currentGear] : Float.MAX_VALUE;
+                (currentGear < maxGear) ? MIN_UPSHIFT_SPEEDS[currentGear] : Float.MAX_VALUE;
 
-        if (gearRpm > upshiftRpm && currentGear < 6 && currentSpeedKmH >= minSpeedForNext) {
+        if (gearRpm > upshiftRpm && currentGear < maxGear && currentSpeedKmH >= minSpeedForNext) {
             currentGear++;
             targetShiftCut = 0.60f;
             shiftLockout = SHIFT_LOCKOUT_S;
             return;
         }
 
-        final float downshiftRpm = 1500f;
+        // Downshifts happen only while coasting or regenerating.
+        // Lock out downshift into 1st while moving (>7 km/h) to avoid coast-down RPM spikes.
+        final float downshiftRpm = 1450f;
         if (gearRpm < downshiftRpm && currentGear > 1 && effectiveLoad < 0.12f) {
+            if (currentGear == 2 && currentSpeedKmH > 7.0f) {
+                return; // Coast in 2nd gear down to walking speed
+            }
             final float after = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 2];
             if (after < REDLINE_RPM - 1200f) {
                 currentGear--;
-                downshiftBlip = 260f;
+                downshiftBlip = 220f;
                 shiftLockout = SHIFT_LOCKOUT_S;
             }
         }
