@@ -270,8 +270,24 @@ public class V8SoundEngine {
     private final LevelingFilter leveling = new LevelingFilter();
 
     private PartitionedConvolver convolver = null;
+
+    /** Exhaust pulse train. This is the only thing the convolver ever sees. */
     private float[] dryBuffer = null;
+
+    /** Convolved exhaust. */
     private float[] wetBuffer = null;
+
+    /**
+     * Everything that is not exhaust: intake noise, sub bass, decel pops.
+     *
+     * These were previously summed into the convolver input, which meant continuous broadband
+     * noise was being driven through a long resonant impulse response. A resonant response
+     * excited by a pulse train rings at the pulse rate and sounds like a pipe; the same response
+     * excited by white noise rings at its own resonances continuously and sounds like static.
+     * The engine simulator convolves only the exhaust signal and mixes the rest downstream, and
+     * so does this now.
+     */
+    private float[] directBuffer = null;
 
     private float popEnvelope = 0f;
     private static final float popProbabilityPerSample = POP_RATE_HZ / (float) SAMPLE_RATE;
@@ -413,6 +429,7 @@ public class V8SoundEngine {
 
         dryBuffer = new float[BUFFER_SIZE];
         wetBuffer = new float[BUFFER_SIZE];
+        directBuffer = new float[BUFFER_SIZE];
 
         observer.reset(targetSpeedKmH);
         currentSpeedKmH = targetSpeedKmH;
@@ -492,9 +509,9 @@ public class V8SoundEngine {
         final short[] out = new short[BUFFER_SIZE];
         while (isRunning) {
             updateControl();
-            renderExcitation(dryBuffer);
+            renderExcitation(dryBuffer, directBuffer);
             applyConvolution(dryBuffer, wetBuffer);
-            finishOutput(dryBuffer, wetBuffer, out);
+            finishOutput(dryBuffer, wetBuffer, directBuffer, out);
 
             final int written = track.write(out, 0, BUFFER_SIZE);
             if (written < 0) {
@@ -507,10 +524,13 @@ public class V8SoundEngine {
     /* ------------------------------------------------------------- synthesis */
 
     /**
-     * Renders one buffer of dry excitation: the cylinder pulse train through jitter, DC removal,
-     * derivative blending and noise modulation, plus the intake layer and sub bass.
+     * Renders one buffer of excitation into two separate paths.
+     *
+     * @param dry    exhaust pulse train after jitter, DC removal, derivative blending and noise
+     *               modulation. Goes to the convolver.
+     * @param direct intake noise, sub bass and decel pops. Bypasses the convolver entirely.
      */
-    private void renderExcitation(float[] dry) {
+    private void renderExcitation(float[] dry, float[] direct) {
         final float load = effectiveLoad;
         final float overrun = overrunAmount;
 
@@ -573,7 +593,11 @@ public class V8SoundEngine {
             final float intake = intakeNoise.f(2f * rng.nextFloat() - 1f) * intakeLevel;
             final float sub = (float) Math.sin(subBassPhase) * subLevel;
 
-            dry[i] = piped + pop + intake + sub;
+            // Only the exhaust goes through the pipe. The intake is on the other side of the
+            // engine, the sub bass is a felt reinforcement rather than a real acoustic source,
+            // and a decel pop happens at the tailpipe rather than at the ports.
+            dry[i] = piped;
+            direct[i] = pop + intake + sub;
         }
     }
 
@@ -633,7 +657,11 @@ public class V8SoundEngine {
     /**
      * Wet/dry blend, level control, saturation and conversion to PCM.
      */
-    private void finishOutput(float[] dry, float[] wet, short[] out) {
+    /**
+     * Blends the convolved exhaust against its dry path, sums the direct layers on top, then
+     * levels, band limits and converts to PCM.
+     */
+    private void finishOutput(float[] dry, float[] wet, float[] direct, short[] out) {
         final float conv = CONV_MIN + effectiveLoad * (CONV_MAX - CONV_MIN);
         final float dryAmount = 1f - conv;
 
@@ -643,7 +671,7 @@ public class V8SoundEngine {
         leveling.setTarget(LEVEL_TARGET * (1f - 0.45f * overrunAmount));
 
         for (int i = 0; i < BUFFER_SIZE; i++) {
-            float v = conv * wet[i] + dryAmount * dry[i];
+            float v = conv * wet[i] + dryAmount * dry[i] + direct[i];
 
             v = leveling.f(v);
             v = antiAlias.f(v);

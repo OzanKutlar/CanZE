@@ -134,8 +134,9 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
 
         initTestDriveButton();
 
-        // V8 Sound Generator
-        soundEngine = new V8SoundEngine();
+        // V8 Sound Generator. The context lets an impulse response asset at assets/v8_ir.wav
+        // override the synthesised exhaust response; without one the synthesised default is used.
+        soundEngine = new V8SoundEngine(this);
         soundEngine.setEngineListener(new V8SoundEngine.EngineListener() {
             @Override
             public void onEngineStateChanged(final float rpm, final int gear) {
