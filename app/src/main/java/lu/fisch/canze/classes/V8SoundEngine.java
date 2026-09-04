@@ -183,21 +183,6 @@ public class V8SoundEngine {
     private static final float JITTER_MIN = 0.55f;    // timing irregularity, strongest at idle
     private static final float JITTER_MAX = 0.18f;
 
-    // Derivative normalisation.
-    //
-    // A first difference of the pulse train scales with how fast the lobe sweeps past, so its
-    // output grows linearly with engine speed. Left unnormalised the derivative term is over
-    // four times larger at 3500 rpm than at idle, which both breaks the meaning of the blend
-    // weight and drives content past Nyquist, where a first difference has its highest gain.
-    // The folded partials do not track the note, which is what makes them audible as sliding
-    // grit rather than as brightness.
-    private static final float DERIVATIVE_REF_RPM = 1000f;
-    private static final float DERIVATIVE_MAX_GAIN = 8f;
-    private static final float DERIVATIVE_BASE_GAIN = 6f;
-
-    /** Keeps the derivative path from exciting anything near Nyquist in the first place. */
-    private static final float DERIVATIVE_LP_HZ = 4000f;
-
     // Decel pops.
     //
     // POP_RATE_HZ is a rate, converted to a per sample probability below. The previous version
@@ -276,8 +261,6 @@ public class V8SoundEngine {
     private final DcBlocker bank2Dc = new DcBlocker();
     private final DerivativeFilter bank1Derivative = new DerivativeFilter();
     private final DerivativeFilter bank2Derivative = new DerivativeFilter();
-    private final LowPassFilter bank1DerivativeLp = new LowPassFilter();
-    private final LowPassFilter bank2DerivativeLp = new LowPassFilter();
     private final LowPassFilter bank1AirNoise = new LowPassFilter();
     private final LowPassFilter bank2AirNoise = new LowPassFilter();
     private final LowPassFilter intakeNoise = new LowPassFilter();
@@ -392,22 +375,14 @@ public class V8SoundEngine {
     private void buildSignalChain() {
         final float fs = SAMPLE_RATE;
 
-        // Cutoffs are now the smoothing applied to a sample and hold, not a filter expected to
-        // pass white noise. See JitterFilter for why the previous 3 Hz corner produced no
-        // wander at all.
-        bank1Jitter.initialize(12, 30f, fs);
-        bank2Jitter.initialize(12, 37f, fs);
+        bank1Jitter.initialize(12, 3.0f, fs);
+        bank2Jitter.initialize(12, 3.7f, fs);
 
         bank1Dc.initialize(12f, fs);
         bank2Dc.initialize(12f, fs);
 
-        // Nominal only. The real gain is set per buffer in renderExcitation, normalised against
-        // engine speed.
-        bank1Derivative.setGain(DERIVATIVE_BASE_GAIN);
-        bank2Derivative.setGain(DERIVATIVE_BASE_GAIN);
-
-        bank1DerivativeLp.setCutoff(DERIVATIVE_LP_HZ, fs);
-        bank2DerivativeLp.setCutoff(DERIVATIVE_LP_HZ, fs);
+        bank1Derivative.setGain(6f);
+        bank2Derivative.setGain(6f);
 
         bank1AirNoise.setCutoff(1500f, fs);
         bank2AirNoise.setCutoff(1650f, fs);
@@ -545,14 +520,6 @@ public class V8SoundEngine {
 
         final float combustion = 0.35f + load * 0.95f;
         final float mix = DF_MIX_MIN + load * (DF_MIX_MAX - DF_MIX_MIN);
-
-        // Normalise the edge emphasis against engine speed so the blend weight above means the
-        // same thing at 3500 rpm as it does at idle.
-        final float rpmForGain = Math.max(currentRpm, 1f);
-        float derivativeGain = DERIVATIVE_BASE_GAIN * (DERIVATIVE_REF_RPM / rpmForGain);
-        if (derivativeGain > DERIVATIVE_MAX_GAIN) derivativeGain = DERIVATIVE_MAX_GAIN;
-        bank1Derivative.setGain(derivativeGain);
-        bank2Derivative.setGain(derivativeGain);
         final float airNoise = AIR_NOISE_MIN + load * (AIR_NOISE_MAX - AIR_NOISE_MIN);
         final float intakeLevel = 0.05f + load * 0.20f;
         final float subLevel = 0.35f + load * 0.25f;
@@ -584,10 +551,8 @@ public class V8SoundEngine {
             float b1 = (float) CylinderPulse.bankOne(crankPhase) * combustion * gate;
             float b2 = (float) CylinderPulse.bankTwo(crankPhase) * combustion * gate;
 
-            b1 = shapeBank(b1, bank1Jitter, bank1Dc, bank1Derivative, bank1DerivativeLp,
-                    bank1AirNoise, mix, airNoise);
-            b2 = shapeBank(b2, bank2Jitter, bank2Dc, bank2Derivative, bank2DerivativeLp,
-                    bank2AirNoise, mix, airNoise);
+            b1 = shapeBank(b1, bank1Jitter, bank1Dc, bank1Derivative, bank1AirNoise, mix, airNoise);
+            b2 = shapeBank(b2, bank2Jitter, bank2Dc, bank2Derivative, bank2AirNoise, mix, airNoise);
 
             final float collector = 0.5f * (b1 + b2);
             final float piped = collectorDelay.f(collector);
@@ -622,17 +587,12 @@ public class V8SoundEngine {
                             JitterFilter jitter,
                             DcBlocker dc,
                             DerivativeFilter derivative,
-                            LowPassFilter derivativeLp,
                             LowPassFilter noiseFilter,
                             float mix,
                             float airNoise) {
         final float jittered = jitter.f(x);
         final float centred = dc.f(jittered);
-
-        // Band limited before the blend, not after. A first difference has its greatest gain at
-        // Nyquist, so anything it excites up there has already aliased by the time the output
-        // stage sees it, and no downstream filter can undo that.
-        final float slope = derivativeLp.f(derivative.f(centred));
+        final float slope = derivative.f(centred);
 
         final float blended = centred * (1f - mix) + slope * mix;
 

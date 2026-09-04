@@ -34,17 +34,6 @@ public final class JitterFilter {
     private int maxJitter = 0;
     private float scale = 0f;
 
-    // Sample and hold state.
-    //
-    // Low passing white noise directly does not work here: a one pole at a few Hz running at
-    // audio rate has a passband gain of well under a thousandth, so its output is effectively
-    // zero and the read offset never moves. Holding a random value for a few milliseconds and
-    // smoothing that instead gives full range wander, because the filter input is constant
-    // across each hold rather than a zero mean noise sequence it almost entirely rejects.
-    private static final int HOLD_SAMPLES = 1470; // about 30 Hz at 44.1 kHz
-    private int holdCountdown = 0;
-    private float holdValue = 0f;
-
     /**
      * @param maxJitterSamples largest read offset in samples, must be positive
      * @param cutoffHz         how fast the offset is allowed to wander
@@ -77,13 +66,8 @@ public final class JitterFilter {
 
         history[write] = x;
 
-        if (holdCountdown <= 0) {
-            holdValue = 2f * rng.nextFloat() - 1f;
-            holdCountdown = HOLD_SAMPLES;
-        }
-        holdCountdown--;
-
-        final float wander = noiseFilter.f(holdValue);
+        final float noise = 2f * rng.nextFloat() - 1f;
+        final float wander = noiseFilter.f(noise);
 
         float d = (wander * 0.5f + 0.5f) * scale * maxJitter;
         if (d < 0f) d = 0f;
