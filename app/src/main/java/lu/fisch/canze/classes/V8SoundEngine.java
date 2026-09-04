@@ -662,27 +662,11 @@ public class V8SoundEngine {
      * levels, band limits and converts to PCM.
      */
     private void finishOutput(float[] dry, float[] wet, float[] direct, short[] out) {
-        final float conv = CONV_MIN + effectiveLoad * (CONV_MAX - CONV_MIN);
-        final float dryAmount = 1f - conv;
-
-        // Overrun is meant to be quieter than full load. Holding a constant target told the
-        // leveller to undo that, so it went looking for whatever was left to amplify, which on
-        // the overrun is the intake noise floor.
-        leveling.setTarget(LEVEL_TARGET * (1f - 0.45f * overrunAmount));
-
+        // TEST A: Pure raw dry pulse signal directly to PCM, fixed gain.
         for (int i = 0; i < BUFFER_SIZE; i++) {
-            float v = conv * wet[i] + dryAmount * dry[i] + direct[i];
-
-            v = leveling.f(v);
-            v = antiAlias.f(v);
-
-            double shaped = v * smoothedMasterVolume * INTERNAL_DRIVE;
-            shaped = softKnee(shaped);
-
-            double pcm = shaped * PCM_FULL_SCALE;
+            double pcm = dry[i] * 12000.0 * smoothedMasterVolume;
             if (pcm > PCM_HARD_CLAMP) pcm = PCM_HARD_CLAMP;
             if (pcm < -PCM_HARD_CLAMP) pcm = -PCM_HARD_CLAMP;
-
             out[i] = (short) pcm;
         }
     }
