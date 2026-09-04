@@ -59,11 +59,9 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
 
     private RpmGaugeView gaugeRpm;
     private Button btnSoundToggle;
+    private Button btnIgnition;
     private Button btnTestDrive;
     private V8SoundEngine soundEngine;
-    private SeekBar sbEngineVolume;
-    private TextView tvVolumeVal;
-    private static final String PREF_KEY_V8_VOLUME = "v8_master_volume";
 
     // ---- Test drive vehicle model ----
     // Tractive effort from a field-weakened EV motor curve against rolling and aerodynamic road
@@ -161,48 +159,66 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
             }
         });
 
-        initVolumeControls();
+        // Apply saved volume and sound tunings
+        lu.fisch.canze.classes.V8SettingsDialog.applySaved(this, soundEngine);
+
+        initAuxControls();
         initTestThrottleControl();
         initSimulatorPanel();
         animateEntrance();
     }
 
-    private void initVolumeControls() {
-        sbEngineVolume = findViewById(R.id.sb_engine_volume);
-        tvVolumeVal = findViewById(R.id.tv_volume_val);
-
-        android.content.SharedPreferences prefs = getSharedPreferences("lu.fisch.canze.settings", MODE_PRIVATE);
-        // contains() rather than a magic minimum, so a deliberate 0% survives backgrounding
-        int savedVolume = prefs.contains(PREF_KEY_V8_VOLUME) ? prefs.getInt(PREF_KEY_V8_VOLUME, 100) : 100;
-        if (savedVolume < 0) savedVolume = 0;
-        if (savedVolume > sbEngineVolume.getMax()) savedVolume = sbEngineVolume.getMax();
-
-        sbEngineVolume.setProgress(savedVolume);
-        tvVolumeVal.setText(String.format(Locale.getDefault(), "%d %%", savedVolume));
-        if (soundEngine != null) {
-            soundEngine.setMasterVolume(savedVolume / 100.0f);
+    /**
+     * Configures the ignition switch, settings modal button, and UI visibility cleanup.
+     * Hides the volume card (now inside Settings) and the test throttle slider when connected.
+     */
+    private void initAuxControls() {
+        View cardVolume = findViewById(R.id.card_volume);
+        if (cardVolume != null) {
+            cardVolume.setVisibility(View.GONE);
         }
 
-        sbEngineVolume.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+        boolean disconnected = !BluetoothManager.getInstance().isConnected();
+        View cardTestThrottle = findViewById(R.id.card_test_throttle);
+        if (cardTestThrottle != null) {
+            cardTestThrottle.setVisibility(disconnected ? View.VISIBLE : View.GONE);
+        }
+
+        if (btnSoundToggle == null) return;
+        android.view.ViewGroup parent = (android.view.ViewGroup) btnSoundToggle.getParent();
+        if (parent == null) return;
+
+        btnIgnition = new Button(this);
+        btnIgnition.setText("🔑 IGNITION: OFF");
+        btnIgnition.setTextColor(0xFF8A99AD);
+        btnIgnition.setAllCaps(false);
+        btnIgnition.setOnClickListener(new View.OnClickListener() {
             @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                tvVolumeVal.setText(String.format(Locale.getDefault(), "%d %%", progress));
-                if (soundEngine != null) {
-                    soundEngine.setMasterVolume(progress / 100.0f);
-                }
-                if (fromUser) {
-                    android.content.SharedPreferences.Editor editor = getSharedPreferences("lu.fisch.canze.settings", MODE_PRIVATE).edit();
-                    editor.putInt(PREF_KEY_V8_VOLUME, progress);
-                    editor.apply();
-                }
+            public void onClick(View v) {
+                if (soundEngine == null) return;
+                int state = soundEngine.getEngineState();
+                boolean turnOn = (state == V8SoundEngine.ENGINE_OFF || state == V8SoundEngine.ENGINE_STOPPING);
+                soundEngine.setIgnition(turnOn);
+                btnIgnition.setText(turnOn ? "🔑 IGNITION: ON" : "🔑 IGNITION: OFF");
+                btnIgnition.setTextColor(turnOn ? 0xFF00E5FF : 0xFF8A99AD);
             }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {}
-
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {}
         });
+
+        Button btnSettings = new Button(this);
+        btnSettings.setText("⚙ V8 SETTINGS");
+        btnSettings.setTextColor(0xFF8A99AD);
+        btnSettings.setAllCaps(false);
+        btnSettings.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                lu.fisch.canze.classes.V8SettingsDialog.show(MotorActivity.this, soundEngine);
+            }
+        });
+
+        int idx = parent.indexOfChild(btnSoundToggle);
+        if (idx < 0) idx = parent.getChildCount();
+        parent.addView(btnIgnition, idx);
+        parent.addView(btnSettings, Math.min(idx + 2, parent.getChildCount()));
     }
 
     /**

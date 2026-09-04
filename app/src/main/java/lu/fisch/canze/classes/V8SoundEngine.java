@@ -9,6 +9,10 @@
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or any
     later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 */
 
 package lu.fisch.canze.classes;
@@ -21,6 +25,7 @@ import android.media.AudioTrack;
 import android.os.Process;
 import android.util.Log;
 
+import java.util.Arrays;
 import java.util.Random;
 
 import lu.fisch.canze.sound.CylinderPulse;
@@ -57,7 +62,8 @@ import lu.fisch.canze.sound.SpeedObserver;
  * keeping it possible at all.
  *
  * Threading contract:
- *  - setInputs / setMuted / setMasterVolume may be called from any thread (volatile writes).
+ *  - setInputs / setMuted / setMasterVolume / setIgnition and the tuning setters may be called
+ *    from any thread (volatile writes).
  *  - start() and stop() are synchronized and expected on the UI thread.
  *  - The AudioTrack is created, owned and released entirely inside the audio thread, so it can
  *    never be released underneath a blocking write().
@@ -97,12 +103,24 @@ public class V8SoundEngine {
     private static final double TWO_PI = 2.0 * Math.PI;
     private static final double CYCLE_RADIANS = CylinderPulse.CYCLE_RADIANS;
 
-    // Virtual transmission. Nothing physical in the car corresponds to this, it exists purely so
-    // the exhaust note sweeps and shifts the way a V8 does instead of tracking one motor rpm all
-    // the way to 8000.
-    private static final float[] GEAR_RATIOS = {3.45f, 2.15f, 1.52f, 1.12f, 0.86f, 0.68f};
+    // Ignition state machine. OFF is the power on default; the driver starts the engine.
+    public static final int ENGINE_OFF = 0;
+    public static final int ENGINE_CRANKING = 1;
+    public static final int ENGINE_RUNNING = 2;
+    public static final int ENGINE_STOPPING = 3;
+
+    // Starter cranks unevenly for just under a second before the engine catches and flares.
+    private static final float CRANK_TIME_S = 0.9f;
+    private static final float CRANK_RPM = 330f;
+    private static final float CRANK_GATE = 0.45f;
+
+    // Shutdown: fuelling cuts within ~170 ms, then the flywheel shudders to a halt over ~2.3s.
+    private static final float STOP_TIME_S = 2.3f;
+
+    // Virtual transmission, tuned for an old school manual feel: 1st is launch only, 2nd runs
+    // to ~30 km/h, then 30-50, 50-70, 70-90, and 6th cruises 90 km/h at roughly 2000 rpm.
+    private static final float[] GEAR_RATIOS = {3.80f, 2.60f, 1.75f, 1.25f, 0.95f, 0.72f};
     private static final float FINAL_DRIVE = 3.65f;
-    private static final float BASE_IDLE_RPM = 780f;
     private static final float REDLINE_RPM = 6600f;
 
     // Real 5AM motor capability, used to normalise measured torque into an engine load.
@@ -119,10 +137,19 @@ public class V8SoundEngine {
     private static final float STATIONARY_SPEED_KMH = 2.5f;
     private static final float STATIONARY_TORQUE_NM = 5f;
 
-    // Torque converter stall-flash launch behavior. At low vehicle speeds under high load,
-    // virtual RPM flares up to the stall speed and descends toward geared RPM as speed builds.
-    private static final float STALL_FLASH_RPM = 1850f;
-    private static final float SLIP_FADE_KMH = 24f;
+    // Defaults for the user tunable parameters. V8SettingsDialog resets to exactly these.
+    public static final float DEFAULT_IDLE_RPM = 780f;
+    public static final float DEFAULT_STALL_FLASH_RPM = 1850f;
+    public static final float DEFAULT_SLIP_FADE_KMH = 24f;
+    public static final float DEFAULT_UPSHIFT_BASE_RPM = 2200f;
+    public static final float DEFAULT_EDGE_BITE_IDLE = 0.04f;
+    public static final float DEFAULT_EDGE_BITE_LOAD = 0.14f;
+    public static final float DEFAULT_AIR_NOISE = 0.09f;
+    public static final float DEFAULT_EXHAUST_DEPTH = 0.55f;
+    public static final float DEFAULT_IDLE_ROUGHNESS = 0.40f;
+    public static final float DEFAULT_SUB_BASS = 0.30f;
+    public static final float DEFAULT_POP_RATE = 6.0f;
+    public static final float DEFAULT_LEVEL_TARGET = 0.70f;
 
     // Physical flywheel torque integration in neutral (dOmega/dt = T_net / J).
     private static final float NEUTRAL_REV_CEILING_RPM = 5200f;
@@ -135,7 +162,7 @@ public class V8SoundEngine {
     private static final float LIMITER_CUT_MIN_TIME_S = 0.045f;
 
     // Minimum road speeds (km/h) required before upshifting into each gear [1->2 .. 5->6]
-    private static final float[] MIN_UPSHIFT_SPEEDS = {0f, 28f, 50f, 70f, 88f, 99f};
+    private static final float[] MIN_UPSHIFT_SPEEDS = {0f, 12f, 30f, 50f, 70f, 90f};
 
     /** Minimum time between two shifts. Closes the 1<->2 hunting window. */
     private static final float SHIFT_LOCKOUT_S = 0.8f;
@@ -178,26 +205,12 @@ public class V8SoundEngine {
      */
     private static final int HEADER_DELAY = 64; // ~1.45 ms
 
-    // Character controls. Tuned to authentic engine-sim levels.
-    // In the C++ simulator, derivative mix (dF_F_mix) is a subtle edge enhancer, not a harsh fuzz,
-    // and air noise is a gentle flutter, not an overwhelming broadband roar.
-    private static final float DF_MIX_MIN = 0.04f;   // subtle edge bite at idle
-    private static final float DF_MIX_MAX = 0.14f;   // crisp combustion snap under full load
-    private static final float AIR_NOISE_MIN = 0.03f; // subtle micro-flutter depth
-    private static final float AIR_NOISE_MAX = 0.09f;
-    private static final float CONV_MIN = 0.30f;      // convolution wet amount
-    private static final float CONV_MAX = 0.55f;
-    private static final float JITTER_MIN = 0.40f;    // timing irregularity, strongest at idle
+    // Character controls that stay fixed.
+    private static final float AIR_NOISE_MIN = 0.03f;
+    private static final float CONV_MIN = 0.30f;
     private static final float JITTER_MAX = 0.12f;
 
     // Decel pops.
-    //
-    // POP_RATE_HZ is a rate, converted to a per sample probability below. The previous version
-    // compared a per sample random draw against a constant intended as a per frame probability,
-    // which fired roughly 176 times a second and held the envelope permanently open. Combined
-    // with an unfiltered noise source that produced continuous broadband static rather than
-    // occasional pops.
-    private static final float POP_RATE_HZ = 6.0f;
     private static final float POP_DECAY = 0.9981f;   // about 12 ms
     private static final float POP_LEVEL = 0.35f;
     private static final float POP_MIN_RPM = 1200f;   // no pops just above idle
@@ -212,9 +225,6 @@ public class V8SoundEngine {
     /** Notify the gauge at ~10.8 Hz rather than at the 86 Hz control rate. */
     private static final int LISTENER_DIVIDER = 8;
 
-    /** Base levelling target. Scaled down on overrun so quiet stays quiet. */
-    private static final float LEVEL_TARGET = 0.70f;
-
     private Thread audioThread;
     private volatile boolean isRunning = false;
     private volatile boolean isMuted = false;
@@ -227,10 +237,29 @@ public class V8SoundEngine {
     private volatile float targetPedalPerc = 0f;
     private volatile float targetTorqueNm = 0f;
 
+    // User tunable parameters (volatile so the settings dialog can write from the UI thread)
+    private volatile float idleRpm = DEFAULT_IDLE_RPM;
+    private volatile float stallFlashRpm = DEFAULT_STALL_FLASH_RPM;
+    private volatile float slipFadeKmh = DEFAULT_SLIP_FADE_KMH;
+    private volatile float upshiftBaseRpm = DEFAULT_UPSHIFT_BASE_RPM;
+    private volatile float edgeBiteIdle = DEFAULT_EDGE_BITE_IDLE;
+    private volatile float edgeBiteLoad = DEFAULT_EDGE_BITE_LOAD;
+    private volatile float airNoiseMax = DEFAULT_AIR_NOISE;
+    private volatile float exhaustDepth = DEFAULT_EXHAUST_DEPTH;
+    private volatile float idleRoughness = DEFAULT_IDLE_ROUGHNESS;
+    private volatile float subBassLevel = DEFAULT_SUB_BASS;
+    private volatile float popRateHz = DEFAULT_POP_RATE;
+    private volatile float levelTarget = DEFAULT_LEVEL_TARGET;
+
+    // Ignition state
+    private volatile int engineState = ENGINE_OFF;
+    private float stateTimer = 0f;
+    private float stopBaseRpm = 0f;
+
     // Control state
     private final SpeedObserver observer = new SpeedObserver();
-    private float currentRpm = BASE_IDLE_RPM;
-    private int currentGear = 1;
+    private float currentRpm = 0f;
+    private int currentGear = 0;
     private float currentThrottle = 0f;
     private float currentTorqueNm = 0f;
     private float currentSpeedKmH = 0f;
@@ -296,7 +325,6 @@ public class V8SoundEngine {
     private float[] directBuffer = null;
 
     private float popEnvelope = 0f;
-    private static final float popProbabilityPerSample = POP_RATE_HZ / (float) SAMPLE_RATE;
     private float smoothedMasterVolume = 0f;
 
     private final Random rng = new Random();
@@ -348,6 +376,91 @@ public class V8SoundEngine {
     public float getMasterVolume() {
         return masterVolume;
     }
+
+    /* ------------------------------------------------------------ ignition */
+
+    /**
+     * Ignition switch. Starting is accepted from OFF and also mid shutdown (a quick re-crank
+     * before the engine has fully stopped, like real life). Stopping is accepted from CRANKING
+     * and RUNNING.
+     *
+     * @param on true to crank and start, false to cut the engine
+     */
+    public void setIgnition(boolean on) {
+        if (on) {
+            if (engineState == ENGINE_OFF || engineState == ENGINE_STOPPING) {
+                engineState = ENGINE_CRANKING;
+                stateTimer = 0f;
+            }
+        } else {
+            if (engineState == ENGINE_CRANKING || engineState == ENGINE_RUNNING) {
+                engineState = ENGINE_STOPPING;
+                stateTimer = 0f;
+                stopBaseRpm = Math.max(currentRpm, 300f);
+            }
+        }
+    }
+
+    public int getEngineState() {
+        return engineState;
+    }
+
+    /* ------------------------------------------------------ tuning setters */
+
+    public void setIdleRpm(float v) {
+        idleRpm = clamp(v, 600f, 1100f);
+    }
+
+    public void setStallFlashRpm(float v) {
+        stallFlashRpm = clamp(v, 800f, 2800f);
+    }
+
+    public void setSlipFadeKmh(float v) {
+        slipFadeKmh = clamp(v, 10f, 40f);
+    }
+
+    public void setUpshiftBaseRpm(float v) {
+        upshiftBaseRpm = clamp(v, 1800f, 3200f);
+    }
+
+    public void setEdgeBiteIdle(float v) {
+        edgeBiteIdle = clamp(v, 0f, 0.30f);
+    }
+
+    public void setEdgeBiteLoad(float v) {
+        edgeBiteLoad = clamp(v, 0f, 0.30f);
+    }
+
+    public void setAirNoise(float v) {
+        airNoiseMax = clamp(v, 0f, 0.20f);
+    }
+
+    public void setExhaustDepth(float v) {
+        exhaustDepth = clamp(v, 0.20f, 0.80f);
+    }
+
+    public void setIdleRoughness(float v) {
+        idleRoughness = clamp(v, 0f, 0.80f);
+    }
+
+    public void setSubBassLevel(float v) {
+        subBassLevel = clamp(v, 0f, 0.80f);
+    }
+
+    public void setPopRate(float v) {
+        popRateHz = clamp(v, 0f, 15f);
+    }
+
+    public void setLevelTarget(float v) {
+        levelTarget = clamp(v, 0.30f, 1.0f);
+    }
+
+    private static float clamp(float v, float min, float max) {
+        if (Float.isNaN(v)) return min;
+        return Math.max(min, Math.min(max, v));
+    }
+
+    /* --------------------------------------------------------- lifecycle */
 
     public synchronized void start() {
         if (isRunning) return;
@@ -424,7 +537,7 @@ public class V8SoundEngine {
         collectorDelay.setDelay(HEADER_DELAY);
 
         leveling.reset();
-        leveling.setTarget(LEVEL_TARGET);
+        leveling.setTarget(levelTarget);
 
         // The old 8.0 ceiling let the leveller recover the full amplitude drop of the overrun
         // combustion gate, which meant boosting the residual intake noise by the same factor.
@@ -531,6 +644,24 @@ public class V8SoundEngine {
     /* ------------------------------------------------------------- synthesis */
 
     /**
+     * Combustion life of the engine as a 0..1 multiplier. OFF and the end of STOPPING are fully
+     * silent; CRANKING turns the cylinders slowly with weak, uneven combustion; STOPPING cuts
+     * fuelling fast so firing stops before rotation does.
+     */
+    private float ignitionGate() {
+        switch (engineState) {
+            case ENGINE_CRANKING:
+                return CRANK_GATE;
+            case ENGINE_RUNNING:
+                return 1f;
+            case ENGINE_STOPPING:
+                return Math.max(0f, 1f - stateTimer * 6f);
+            default:
+                return 0f;
+        }
+    }
+
+    /**
      * Renders one buffer of excitation into two separate paths.
      *
      * @param dry    exhaust pulse train after jitter, DC removal, derivative blending and noise
@@ -538,22 +669,32 @@ public class V8SoundEngine {
      * @param direct intake noise, sub bass and decel pops. Bypasses the convolver entirely.
      */
     private void renderExcitation(float[] dry, float[] direct) {
+        if (engineState == ENGINE_OFF) {
+            Arrays.fill(dry, 0f);
+            Arrays.fill(direct, 0f);
+            return;
+        }
+
         final float load = effectiveLoad;
         final float overrun = overrunAmount;
+        final float ignition = ignitionGate();
 
         final double crankRadPerSample =
                 ((currentRpm * crankCycleFlutter) / 60.0) * TWO_PI / SAMPLE_RATE;
         final double firingRadPerSample = crankRadPerSample * SUB_BASS_ORDER;
 
-        final float combustion = 0.40f + load * 0.90f;
-        final float mix = DF_MIX_MIN + load * (DF_MIX_MAX - DF_MIX_MIN);
-        final float airNoise = AIR_NOISE_MIN + load * (AIR_NOISE_MAX - AIR_NOISE_MIN);
-        final float subLevel = 0.30f + load * 0.25f;
+        final float combustion = (0.40f + load * 0.90f) * ignition;
+        final float mix = edgeBiteIdle + load * (edgeBiteLoad - edgeBiteIdle);
+        final float airNoise = AIR_NOISE_MIN + load * (airNoiseMax - AIR_NOISE_MIN);
+        final float subLevel = (subBassLevel + load * 0.25f) * ignition;
         final float targetMaster = isMuted ? 0f : masterVolume;
 
-        // Jitter is strongest at idle: a loping engine is audibly irregular, a loaded one is not.
-        bank1Jitter.setScale(JITTER_MIN + load * (JITTER_MAX - JITTER_MIN));
-        bank2Jitter.setScale(JITTER_MIN + load * (JITTER_MAX - JITTER_MIN));
+        // Jitter is strongest at idle: a loping engine is audibly irregular, a loaded one is
+        // not. Cranking is the most irregular of all, because cylinders catch one at a time.
+        final float jitterNow = (engineState == ENGINE_CRANKING) ? 0.85f
+                : idleRoughness + load * (JITTER_MAX - idleRoughness);
+        bank1Jitter.setScale(jitterNow);
+        bank2Jitter.setScale(jitterNow);
 
         for (int i = 0; i < BUFFER_SIZE; i++) {
             crankPhase += crankRadPerSample;
@@ -584,12 +725,9 @@ public class V8SoundEngine {
             final float piped = collectorDelay.f(collector);
 
             // Decel pops: unburnt mixture igniting in a hot pipe on the overrun.
-            //
-            // The trigger probability is a rate divided by the sample rate, so POP_RATE_HZ means
-            // what it says no matter what buffer or sample rate this runs at.
             popEnvelope *= POP_DECAY;
-            if (overrun > 0.05f && currentRpm > POP_MIN_RPM
-                    && rng.nextFloat() < overrun * popProbabilityPerSample) {
+            if (ignition > 0.5f && overrun > 0.05f && currentRpm > POP_MIN_RPM
+                    && rng.nextFloat() < overrun * popRateHz / (float) SAMPLE_RATE) {
                 popEnvelope = overrun * POP_LEVEL;
             }
             // Enveloped noise through a low pass, so each event is a band limited crack instead
@@ -600,7 +738,6 @@ public class V8SoundEngine {
 
             // Pure combustion pulses feed the exhaust pipe. Direct layer contains
             // exclusively the physical sub-bass order and overrun decel pops.
-            // All artificial continuous white noise has been removed.
             dry[i] = piped;
             direct[i] = pop + sub;
         }
@@ -625,7 +762,6 @@ public class V8SoundEngine {
 
         // In the original engine simulator, air-noise modulation is applied ONLY to the
         // low-frequency base pulse (f * r_mixed), NEVER to the derivative edge (f_p).
-        // Multiplying steep derivative spikes by noise was creating massive sideband hash.
         final float noise = noiseFilter.f(2f * rng.nextFloat() - 1f);
         final float modulator = airNoise * noise + (1f - airNoise);
 
@@ -661,25 +797,19 @@ public class V8SoundEngine {
     private final float[] blockScratchOut = new float[CONV_BLOCK];
 
     /**
-     * Wet/dry blend, level control, saturation and conversion to PCM.
-     */
-    /**
      * Blends the convolved exhaust against its dry path, sums the direct layers on top, then
      * levels, band limits and converts to PCM.
      */
     private void finishOutput(float[] dry, float[] wet, float[] direct, short[] out) {
-        final float conv = CONV_MIN + effectiveLoad * (CONV_MAX - CONV_MIN);
+        final float conv = CONV_MIN + effectiveLoad * (exhaustDepth - CONV_MIN);
         final float dryAmount = 1f - conv;
 
         // Overrun is meant to be quieter than full load. Holding a constant target told the
         // leveller to undo that, so it went looking for whatever was left to amplify, which on
         // the overrun is the intake noise floor.
-        leveling.setTarget(LEVEL_TARGET * (1f - 0.45f * overrunAmount));
+        leveling.setTarget(levelTarget * (1f - 0.45f * overrunAmount));
 
         for (int i = 0; i < BUFFER_SIZE; i++) {
-            // The unit-energy normalized impulse response returns wet samples with ~0.45x
-            // relative peak amplitude. Multiplying wet by 2.2f levels the wet and dry paths
-            // perfectly so the deep exhaust pipe cavity rings out with robust muscle authority.
             float exhaust = conv * (wet[i] * 2.2f) + dryAmount * dry[i];
             float v = exhaust + direct[i];
 
@@ -716,6 +846,24 @@ public class V8SoundEngine {
      * BUFFER_SIZE and therefore identical on every device.
      */
     private void updateControl() {
+        switch (engineState) {
+            case ENGINE_OFF:
+                currentRpm = 0f;
+                currentGear = 0;
+                notifyListener();
+                return;
+            case ENGINE_CRANKING:
+                runCranking();
+                notifyListener();
+                return;
+            case ENGINE_STOPPING:
+                runStopping();
+                notifyListener();
+                return;
+            default:
+                break;
+        }
+
         applyInputSmoothing();
 
         observer.predict(currentTorqueNm, FRAME_DT);
@@ -736,6 +884,40 @@ public class V8SoundEngine {
         notifyListener();
     }
 
+    private void runCranking() {
+        stateTimer += FRAME_DT;
+        currentGear = 0;
+        // Starter motor turns the flywheel unevenly with subtle compression wobbles
+        final float wobble = (float) (Math.sin(stateTimer * 31.0) * 22.0 + Math.sin(stateTimer * 47.0) * 11.0);
+        final float crankTarget = CRANK_RPM + wobble;
+        currentRpm += (crankTarget - currentRpm) * 0.10f;
+
+        if (stateTimer >= CRANK_TIME_S) {
+            engineState = ENGINE_RUNNING;
+            stateTimer = 0f;
+            // Catch flare: initial jump to ~1.45x idle, then settles
+            currentRpm = idleRpm * 1.45f;
+        }
+    }
+
+    private void runStopping() {
+        stateTimer += FRAME_DT;
+        currentGear = 0;
+        // Flywheel momentum winds down exponentially
+        stopBaseRpm *= (1.0f - 1.5f * FRAME_DT);
+
+        // Shudder swells and dies out as rotation comes to a complete halt
+        final float fade = Math.max(0f, 1f - stateTimer / STOP_TIME_S);
+        final float wobbleAmp = 28f * Math.min(1f, stateTimer * 2f) * fade;
+        currentRpm = Math.max(0f, stopBaseRpm + (float) Math.sin(stateTimer * 30.0) * wobbleAmp);
+
+        if (stateTimer >= STOP_TIME_S || stopBaseRpm < 25f) {
+            currentRpm = 0f;
+            stopBaseRpm = 0f;
+            engineState = ENGINE_OFF;
+        }
+    }
+
     private void applyInputSmoothing() {
         final float rawThrottle = targetPedalPerc / 100.0f;
 
@@ -754,7 +936,7 @@ public class V8SoundEngine {
         currentTorqueNm += torqueDelta * (torqueDelta > 0f ? 0.40f : 0.16f);
 
         downshiftBlip *= 0.90f;
-        targetShiftCut += (1.0f - targetShiftCut) * 0.10f;
+        targetShiftCut += (1.0f - targetShiftCut) * 0.055f;
         if (shiftLockout > 0f) shiftLockout -= FRAME_DT;
     }
 
@@ -805,8 +987,7 @@ public class V8SoundEngine {
      * Standing still the pedal is the only meaningful signal, and it is what makes blipping the
      * throttle satisfying. Once moving the pedal is only a request whose meaning changes with
      * speed, so measured torque governs instead, normalised against what the motor can actually
-     * deliver at this speed. Without that normalisation the same pedal position sounds strained
-     * at high speed purely because field weakening has cut the available torque.
+     * deliver at this speed.
      *
      * Negative torque returns zero, letting the overrun path take over.
      */
@@ -833,7 +1014,7 @@ public class V8SoundEngine {
         targetLimiterCut = 1.0f;
 
         final float lope = (float) (Math.sin(lopePhase) * 25.0 + Math.cos(lopePhase * 0.65) * 18.0);
-        final float targetIdle = BASE_IDLE_RPM + lope;
+        final float targetIdle = idleRpm + lope;
         currentRpm += (targetIdle - currentRpm) * 0.07f;
     }
 
@@ -877,7 +1058,7 @@ public class V8SoundEngine {
             targetLimiterCut = 1.0f;
 
             final float idleProximity =
-                    Math.max(0.0f, Math.min(1.0f, (currentRpm - BASE_IDLE_RPM) / 650.0f));
+                    Math.max(0.0f, Math.min(1.0f, (currentRpm - idleRpm) / 650.0f));
             final float cushion = 0.50f + (idleProximity * 0.50f);
             final float decel = REV_NATURAL_DECEL_RPM_S
                     * (1.0f + (currentRpm / NEUTRAL_REV_CEILING_RPM) * 0.4f) * cushion;
@@ -885,8 +1066,8 @@ public class V8SoundEngine {
             currentRpm -= decel * FRAME_DT;
         }
 
-        if (currentRpm < BASE_IDLE_RPM) {
-            currentRpm = BASE_IDLE_RPM;
+        if (currentRpm < idleRpm) {
+            currentRpm = idleRpm;
         }
     }
 
@@ -896,18 +1077,19 @@ public class V8SoundEngine {
         if (currentGear == 0) currentGear = 1;
 
         // Load delayed upshift schedule. Driven by measured torque rather than pedal, so gear
-        // holding responds to what the car is actually doing.
-        final float baseUpshift = 2400f - (cruiseTimer * 300f);
+        // holding responds to what the car is actually doing. Manual style: shift early under
+        // light load, wind out only when the drivetrain is working hard.
+        final float baseUpshift = upshiftBaseRpm - (cruiseTimer * 300f);
         final float aggression = (float) Math.pow(effectiveLoad, 1.15);
-        float upshiftRpm = baseUpshift + (aggression * 3900f);
-        if (upshiftRpm > REDLINE_RPM - 400f) upshiftRpm = REDLINE_RPM - 400f;
+        float upshiftRpm = baseUpshift + (aggression * 2300f);
+        if (upshiftRpm > 4500f) upshiftRpm = 4500f;
 
         evaluateShift(wheelRpm, upshiftRpm);
 
         // Launch converter slip: high-stall flare that decays quadratically with road speed
-        final float slipFade = Math.max(0f, 1f - (currentSpeedKmH / SLIP_FADE_KMH));
+        final float slipFade = Math.max(0f, 1f - (currentSpeedKmH / slipFadeKmh));
         final float slipCurve = slipFade * slipFade;
-        final float launchSlip = (float) Math.pow(effectiveLoad, 1.25) * STALL_FLASH_RPM * slipCurve;
+        final float launchSlip = (float) Math.pow(effectiveLoad, 1.25) * stallFlashRpm * slipCurve;
 
         final float converterSlip = 1.018f + (effectiveLoad * 0.024f);
 
@@ -924,9 +1106,9 @@ public class V8SoundEngine {
                 + breathe
                 + rpmWanderSmoothed;
 
-        float target = Math.max(gearedRpm, BASE_IDLE_RPM + launchSlip);
+        float target = Math.max(gearedRpm, idleRpm + launchSlip);
 
-        if (target < BASE_IDLE_RPM) target = BASE_IDLE_RPM;
+        if (target < idleRpm) target = idleRpm;
 
         if (target >= REDLINE_RPM || currentRpm >= REDLINE_RPM) {
             if (currentRpm >= REDLINE_RPM) {
@@ -963,20 +1145,18 @@ public class V8SoundEngine {
 
         if (gearRpm > upshiftRpm && currentGear < 6 && currentSpeedKmH >= minSpeedForNext) {
             currentGear++;
-            targetShiftCut = 0.82f;
+            targetShiftCut = 0.60f; // Deeper manual shift cut
             shiftLockout = SHIFT_LOCKOUT_S;
             return;
         }
 
-        // Downshifts happen only while coasting or regenerating. In this car there is no power
-        // downshift to model, and gating on load rather than pedal is what distinguishes a
-        // released pedal at speed (regeneration) from a released pedal at rest (creep).
+        // Downshifts happen only while coasting or regenerating.
         final float downshiftRpm = 1500f;
         if (gearRpm < downshiftRpm && currentGear > 1 && effectiveLoad < 0.12f) {
             final float after = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 2];
             if (after < REDLINE_RPM - 1200f) {
                 currentGear--;
-                downshiftBlip = 180f;
+                downshiftBlip = 260f; // Distinct rev-match blip
                 shiftLockout = SHIFT_LOCKOUT_S;
             }
         }
