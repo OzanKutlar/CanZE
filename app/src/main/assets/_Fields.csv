@@ -337,8 +337,14 @@
 ,7ec,0,23,1,0,0,,19023b,5902ff,ff,Query DTC
 ,7ec,24,31,1,40,1,°C,222001,622001,ff,HV Battery temperature
 ,7ec,24,39,0.02,0,2,%,222002,622002,ff,HV battery State of Charge
+,7ec,24,31,1,40,1,°C,222001,622001,ff,HV Battery temperature
+,7ec,24,39,0.02,0,2,%,222002,622002,ff,State Of Charge
 ,7ec,24,39,2,0,2,%,222002,622002,e2,SOC
 ,7ec,24,39,2.083333333,0,2,%,222002,622002,e5,SOC
+,7ec,24,39,0.01,0,2,km/h,222003,622003,ff,Vehicle speed
+,7ec,29,31,1,0,0,,222238,622238,ff,Gear level position,0:Transient;1:P;2:R;3:N;4:D
+,7ec,31,31,1,0,0,,22332f,62332f,ff,A/C authorized,0:Off;1:On
+,7ec,31,31,1,0,0,,2233a2,6233a2,ff,A/C requested,0:Off;1:On
 ,7ec,24,39,0.01,0,2,km/h,222003,622003,ff,Vehicle speed
 ,7ec,24,39,0.01,0,2,V,222005,622005,ff,12V battery voltage
 ,7ec,29,31,1,0,0,,222238,622238,ff,Gear level position,0:Transient;1:P;2:R;3:N;4:D

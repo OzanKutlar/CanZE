@@ -49,23 +49,23 @@
                 android:letterSpacing="0.1" />
         </LinearLayout>
 
-        <!-- HERO SPEEDOMETER CARD (2 DECIMAL PLACES) -->
+        <!-- HERO: SPEED CARD (2 DECIMALS) -->
         <LinearLayout
             android:id="@+id/card_dash_speed"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:background="@drawable/bg_motor_card"
             android:orientation="vertical"
-            android:gravity="center_horizontal"
+            android:gravity="center"
             android:padding="22dp"
             android:layout_marginBottom="12dp">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="VEHICLE SPEED"
+                android:text="SPEED"
                 android:textColor="#8A99AD"
-                android:textSize="11sp"
+                android:textSize="12sp"
                 android:textStyle="bold"
                 android:letterSpacing="0.1" />
 
@@ -74,7 +74,7 @@
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="bottom"
-                android:layout_marginTop="6dp">
+                android:layout_marginTop="4dp">
 
                 <TextView
                     android:id="@+id/textSpeed"
@@ -90,17 +90,17 @@
                     android:id="@+id/textSpeedUnit"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="6dp"
-                    android:layout_marginLeft="6dp"
-                    android:layout_marginBottom="10dp"
+                    android:layout_marginStart="8dp"
+                    android:layout_marginLeft="8dp"
+                    android:layout_marginBottom="8dp"
                     android:text="km/h"
                     android:textColor="#00E5FF"
-                    android:textSize="14sp"
+                    android:textSize="16sp"
                     android:textStyle="bold" />
             </LinearLayout>
         </LinearLayout>
 
-        <!-- PRND GEAR SELECTOR STRIP -->
+        <!-- PRND GEAR STRIP CARD -->
         <LinearLayout
             android:id="@+id/card_dash_gear"
             android:layout_width="match_parent"
@@ -113,7 +113,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="GEAR POSITION"
+                android:text="TRANSMISSION GEAR"
                 android:textColor="#8A99AD"
                 android:textSize="11sp"
                 android:textStyle="bold"
@@ -126,65 +126,65 @@
                 android:orientation="horizontal"
                 android:gravity="center">
 
-                <!-- PARK -->
+                <!-- PARK (P) -->
                 <TextView
                     android:id="@+id/gearP"
                     android:layout_width="0dp"
                     android:layout_height="44dp"
                     android:layout_weight="1"
-                    android:layout_margin="3dp"
-                    android:background="#141D2C"
+                    android:layout_margin="4dp"
+                    android:background="#1A2436"
                     android:gravity="center"
                     android:text="P"
-                    android:textColor="#4A6572"
+                    android:textColor="#4A5B73"
                     android:textSize="20sp"
                     android:textStyle="bold" />
 
-                <!-- REVERSE -->
+                <!-- REVERSE (R) -->
                 <TextView
                     android:id="@+id/gearR"
                     android:layout_width="0dp"
                     android:layout_height="44dp"
                     android:layout_weight="1"
-                    android:layout_margin="3dp"
-                    android:background="#141D2C"
+                    android:layout_margin="4dp"
+                    android:background="#1A2436"
                     android:gravity="center"
                     android:text="R"
-                    android:textColor="#4A6572"
+                    android:textColor="#4A5B73"
                     android:textSize="20sp"
                     android:textStyle="bold" />
 
-                <!-- NEUTRAL -->
+                <!-- NEUTRAL (N) -->
                 <TextView
                     android:id="@+id/gearN"
                     android:layout_width="0dp"
                     android:layout_height="44dp"
                     android:layout_weight="1"
-                    android:layout_margin="3dp"
-                    android:background="#141D2C"
+                    android:layout_margin="4dp"
+                    android:background="#1A2436"
                     android:gravity="center"
                     android:text="N"
-                    android:textColor="#4A6572"
+                    android:textColor="#4A5B73"
                     android:textSize="20sp"
                     android:textStyle="bold" />
 
-                <!-- DRIVE -->
+                <!-- DRIVE (D) -->
                 <TextView
                     android:id="@+id/gearD"
                     android:layout_width="0dp"
                     android:layout_height="44dp"
                     android:layout_weight="1"
-                    android:layout_margin="3dp"
-                    android:background="#141D2C"
+                    android:layout_margin="4dp"
+                    android:background="#1A2436"
                     android:gravity="center"
                     android:text="D"
-                    android:textColor="#4A6572"
+                    android:textColor="#4A5B73"
                     android:textSize="20sp"
                     android:textStyle="bold" />
             </LinearLayout>
         </LinearLayout>
 
-        <!-- TWO-UP ROW: BATTERY % (2 DECIMALS) AND BATTERY TEMPERATURE -->
+        <!-- TWO-UP: BATTERY SOC (2 DECIMALS) & BATTERY TEMP -->
         <LinearLayout
             android:id="@+id/card_dash_battery"
             android:layout_width="match_parent"
@@ -193,7 +193,7 @@
             android:baselineAligned="false"
             android:layout_marginBottom="12dp">
 
-            <!-- Battery Percentage Card -->
+            <!-- Battery Percentage (SoC) -->
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
@@ -235,25 +235,23 @@
                         android:layout_height="wrap_content"
                         android:layout_marginStart="4dp"
                         android:layout_marginLeft="4dp"
-                        android:layout_marginBottom="4dp"
+                        android:layout_marginBottom="3dp"
                         android:text="%"
                         android:textColor="#00E676"
                         android:textSize="13sp"
                         android:textStyle="bold" />
                 </LinearLayout>
 
-                <ProgressBar
-                    android:id="@+id/progressSoc"
-                    style="?android:attr/progressBarStyleHorizontal"
-                    android:layout_width="match_parent"
-                    android:layout_height="6dp"
-                    android:layout_marginTop="6dp"
-                    android:max="10000"
-                    android:progress="0"
-                    android:progressDrawable="@drawable/motor_progress_soc" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="State of Charge"
+                    android:textColor="#607D8B"
+                    android:textSize="11sp" />
             </LinearLayout>
 
-            <!-- Battery Temperature Card -->
+            <!-- Battery Temperature -->
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
@@ -295,7 +293,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginStart="4dp"
                         android:layout_marginLeft="4dp"
-                        android:layout_marginBottom="4dp"
+                        android:layout_marginBottom="3dp"
                         android:text="°C"
                         android:textColor="#00E5FF"
                         android:textSize="13sp"
@@ -305,14 +303,14 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="HV Pack Temp"
+                    android:layout_marginTop="2dp"
+                    android:text="Traction pack"
                     android:textColor="#607D8B"
                     android:textSize="11sp" />
             </LinearLayout>
         </LinearLayout>
 
-        <!-- AIR CONDITIONING (A/C) CARD -->
+        <!-- A/C STATUS CARD -->
         <LinearLayout
             android:id="@+id/card_dash_ac"
             android:layout_width="match_parent"
@@ -331,7 +329,7 @@
                 android:layout_marginRight="10dp"
                 android:text="●"
                 android:textColor="#607D8B"
-                android:textSize="22sp" />
+                android:textSize="20sp" />
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -349,11 +347,11 @@
                     android:letterSpacing="0.1" />
 
                 <TextView
-                    android:id="@+id/textAcDetails"
+                    android:id="@+id/textAcSub"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="2dp"
-                    android:text="Compressor: Idle"
+                    android:text="Compressor"
                     android:textColor="#607D8B"
                     android:textSize="11sp" />
             </LinearLayout>
@@ -364,7 +362,7 @@
                 android:layout_height="wrap_content"
                 android:text="OFF"
                 android:textColor="#607D8B"
-                android:textSize="22sp"
+                android:textSize="20sp"
                 android:textStyle="bold" />
         </LinearLayout>
 

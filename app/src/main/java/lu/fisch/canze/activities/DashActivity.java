@@ -16,12 +16,10 @@
 package lu.fisch.canze.activities;
 
 import android.graphics.Color;
-import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.view.Menu;
 import android.view.View;
 import android.view.animation.DecelerateInterpolator;
-import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import java.util.Locale;
@@ -32,38 +30,38 @@ import lu.fisch.canze.interfaces.DebugListener;
 import lu.fisch.canze.interfaces.FieldListener;
 
 /**
- * Modern Dashboard Activity displaying:
- * - Vehicle Speed with 2 decimal places
- * - Battery Percentage (SoC) with 2 decimal places
- * - Battery Temperature
- * - PRND Gear Position
- * - A/C Active / Inactive Status
+ * Modern Dashboard Activity.
+ * Displays:
+ *  - Vehicle speed (2 decimal places)
+ *  - Battery percentage (SoC, 2 decimal places)
+ *  - Battery temperature (°C)
+ *  - Gear position (PRND)
+ *  - A/C status (On / Off)
  */
 public class DashActivity extends CanzeActivity implements FieldListener, DebugListener {
 
-    // 7EC / EVC PIDs
-    private static final String SID_Speed_7EC          = "7ec.622003.24";
-    private static final String SID_Speed_Free         = "5d7.0";
-    private static final String SID_BatTemp_7EC        = "7ec.622001.24";
-    private static final String SID_BatTemp_Free       = "42e.44";
-    private static final String SID_Soc_7EC            = "7ec.622002.24";
-    private static final String SID_Soc_Free           = "654.25";
-    private static final String SID_Gear_7EC           = "7ec.622238.29";
-    private static final String SID_Gear_Alt           = "7ec.622c04.29";
-    private static final String SID_AcAuth_7EC         = "7ec.62332f.31";
-    private static final String SID_AcReq_7EC          = "7ec.6233a2.31";
-    private static final String SID_AcPower_7EC        = "7ec.6233a7.24";
+    // Diagnostic SIDs from 7EC (EVC)
+    private static final String SID_Speed       = "7ec.622003.24";
+    private static final String SID_Soc_24      = "7ec.622002.24";
+    private static final String SID_BatTemp     = "7ec.622001.24";
+    private static final String SID_Gear        = "7ec.622238.29";
+    private static final String SID_AcAuth      = "7ec.62332f.31";
+    private static final String SID_AcReq       = "7ec.6233a2.31";
+    private static final String SID_AcPwr       = "7ec.6233a7.24";
 
-    // Colors
+    // Passive CAN speed fallback
+    private static final String SID_SpeedPassive = "5d7.0";
+
     private static final int COLOR_CYAN    = Color.parseColor("#00E5FF");
     private static final int COLOR_GREEN   = Color.parseColor("#00E676");
     private static final int COLOR_AMBER   = Color.parseColor("#FFD600");
     private static final int COLOR_RED     = Color.parseColor("#FF5252");
     private static final int COLOR_MUTED   = Color.parseColor("#607D8B");
-    private static final int COLOR_GEAR_INACTIVE = Color.parseColor("#4A6572");
-    private static final int BG_GEAR_INACTIVE    = Color.parseColor("#141D2C");
+    private static final int COLOR_GEAR_OFF= Color.parseColor("#4A5B73");
 
-    private boolean acActive = false;
+    private boolean acAuthorized = false;
+    private boolean acRequested  = false;
+    private double  acPower      = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -97,29 +95,17 @@ public class DashActivity extends CanzeActivity implements FieldListener, DebugL
     }
 
     @Override
-    public void initListeners() {
+    protected void initListeners() {
         MainActivity.getInstance().setDebugListener(this);
 
-        // Speed: 200 ms
-        addField(SID_Speed_7EC, 200);
-        addField(SID_Speed_Free, 100);
-
-        // Battery Temp: 2000 ms
-        addField(SID_BatTemp_7EC, 2000);
-        addField(SID_BatTemp_Free, 2000);
-
-        // Battery SoC: 1000 ms
-        addField(SID_Soc_7EC, 1000);
-        addField(SID_Soc_Free, 1000);
-
-        // Gear: 300 ms
-        addField(SID_Gear_7EC, 300);
-        addField(SID_Gear_Alt, 300);
-
-        // A/C Status: 1000 ms
-        addField(SID_AcAuth_7EC, 1000);
-        addField(SID_AcReq_7EC, 1000);
-        addField(SID_AcPower_7EC, 1000);
+        addField(SID_Speed, 1000);
+        addField(SID_SpeedPassive, 500);
+        addField(SID_Soc_24, 2000);
+        addField(SID_BatTemp, 3000);
+        addField(SID_Gear, 1000);
+        addField(SID_AcAuth, 2000);
+        addField(SID_AcReq, 2000);
+        addField(SID_AcPwr, 2000);
     }
 
     @Override
@@ -140,131 +126,129 @@ public class DashActivity extends CanzeActivity implements FieldListener, DebugL
         if (Double.isNaN(val)) return;
 
         // Speed (2 decimal places)
-        if (sid.equals(SID_Speed_7EC) || sid.equals(SID_Speed_Free)) {
-            updateSpeed(val, field.getUnit());
+        if (sid.equals(SID_Speed) || sid.equals(SID_SpeedPassive)) {
+            TextView tvSpeed = findViewById(R.id.textSpeed);
+            if (tvSpeed != null) {
+                tvSpeed.setText(String.format(Locale.getDefault(), "%.2f", val));
+            }
+            TextView tvUnit = findViewById(R.id.textSpeedUnit);
+            if (tvUnit != null) {
+                tvUnit.setText(field.getUnit());
+            }
             return;
         }
 
-        // Battery Percentage (SoC - 2 decimal places)
-        if (sid.equals(SID_Soc_7EC) || sid.equals(SID_Soc_Free)) {
-            updateSoc(val);
+        // Battery Percentage (SoC, 2 decimal places)
+        if (sid.equals(SID_Soc_24)) {
+            TextView tvSoc = findViewById(R.id.textSoc);
+            if (tvSoc != null) {
+                tvSoc.setText(String.format(Locale.getDefault(), "%.2f", val));
+            }
             return;
         }
 
-        // Battery Temperature
-        if (sid.equals(SID_BatTemp_7EC) || sid.equals(SID_BatTemp_Free)) {
-            updateBatteryTemp(val);
+        // Battery Temperature (°C)
+        if (sid.equals(SID_BatTemp)) {
+            TextView tvTemp = findViewById(R.id.textBatTemp);
+            if (tvTemp != null) {
+                tvTemp.setText(String.format(Locale.getDefault(), "%.1f", val));
+                if (val > 45) {
+                    tvTemp.setTextColor(COLOR_RED);
+                } else if (val > 35) {
+                    tvTemp.setTextColor(COLOR_AMBER);
+                } else {
+                    tvTemp.setTextColor(COLOR_CYAN);
+                }
+            }
             return;
         }
 
-        // Gear Level (PRND)
-        if (sid.equals(SID_Gear_7EC) || sid.equals(SID_Gear_Alt)) {
-            updateGear((int) Math.round(val));
+        // Transmission Gear (PRND)
+        if (sid.equals(SID_Gear)) {
+            updateGearUI((int) Math.round(val));
             return;
         }
 
         // A/C Status
-        if (sid.equals(SID_AcAuth_7EC) || sid.equals(SID_AcReq_7EC) || sid.equals(SID_AcPower_7EC)) {
-            updateAc(sid, val);
+        if (sid.equals(SID_AcAuth)) {
+            acAuthorized = (val >= 0.5);
+            updateAcUI();
+            return;
+        }
+        if (sid.equals(SID_AcReq)) {
+            acRequested = (val >= 0.5);
+            updateAcUI();
+            return;
+        }
+        if (sid.equals(SID_AcPwr)) {
+            acPower = val;
+            updateAcUI();
         }
     }
 
-    private void updateSpeed(double speedVal, String unit) {
-        TextView textSpeed = findViewById(R.id.textSpeed);
-        if (textSpeed != null) {
-            textSpeed.setText(String.format(Locale.getDefault(), "%.2f", speedVal));
-        }
-        TextView textSpeedUnit = findViewById(R.id.textSpeedUnit);
-        if (textSpeedUnit != null && unit != null && !unit.isEmpty()) {
-            textSpeedUnit.setText(unit);
-        }
-    }
+    /**
+     * 0: Transient / Neutral
+     * 1: Park (P)
+     * 2: Reverse (R)
+     * 3: Neutral (N)
+     * 4: Drive (D)
+     */
+    private void updateGearUI(int gearCode) {
+        TextView p = findViewById(R.id.gearP);
+        TextView r = findViewById(R.id.gearR);
+        TextView n = findViewById(R.id.gearN);
+        TextView d = findViewById(R.id.gearD);
+        if (p == null || r == null || n == null || d == null) return;
 
-    private void updateSoc(double socVal) {
-        // Normalise if raw was returned in 0..1 range
-        if (socVal <= 1.0 && socVal > 0) socVal *= 100.0;
-        TextView textSoc = findViewById(R.id.textSoc);
-        if (textSoc != null) {
-            textSoc.setText(String.format(Locale.getDefault(), "%.2f", socVal));
-        }
-        ProgressBar pb = findViewById(R.id.progressSoc);
-        if (pb != null) {
-            pb.setProgress((int) (Math.max(0, Math.min(100.0, socVal)) * 100));
-        }
-    }
+        // Reset all
+        p.setTextColor(COLOR_GEAR_OFF);
+        p.setBackgroundColor(Color.parseColor("#1A2436"));
+        r.setTextColor(COLOR_GEAR_OFF);
+        r.setBackgroundColor(Color.parseColor("#1A2436"));
+        n.setTextColor(COLOR_GEAR_OFF);
+        n.setBackgroundColor(Color.parseColor("#1A2436"));
+        d.setTextColor(COLOR_GEAR_OFF);
+        d.setBackgroundColor(Color.parseColor("#1A2436"));
 
-    private void updateBatteryTemp(double tempVal) {
-        TextView textBatTemp = findViewById(R.id.textBatTemp);
-        if (textBatTemp != null) {
-            textBatTemp.setText(String.format(Locale.getDefault(), "%.1f", tempVal));
-            if (tempVal >= 45.0) {
-                textBatTemp.setTextColor(COLOR_RED);
-            } else if (tempVal >= 35.0) {
-                textBatTemp.setTextColor(COLOR_AMBER);
-            } else {
-                textBatTemp.setTextColor(COLOR_CYAN);
-            }
-        }
-    }
-
-    private void updateGear(int gearCode) {
-        // Reset all 4 buttons
-        setGearStyle(R.id.gearP, false, 0, 0);
-        setGearStyle(R.id.gearR, false, 0, 0);
-        setGearStyle(R.id.gearN, false, 0, 0);
-        setGearStyle(R.id.gearD, false, 0, 0);
-
-        // EVC standard mapping: 1=P, 2=R, 3=N, 4=D
         switch (gearCode) {
-            case 1:
-                setGearStyle(R.id.gearP, true, COLOR_AMBER, Color.parseColor("#2E2500"));
+            case 1: // P
+                p.setTextColor(COLOR_AMBER);
+                p.setBackgroundColor(Color.parseColor("#2A3326"));
                 break;
-            case 2:
-                setGearStyle(R.id.gearR, true, COLOR_RED, Color.parseColor("#330D0D"));
+            case 2: // R
+                r.setTextColor(COLOR_RED);
+                r.setBackgroundColor(Color.parseColor("#361E26"));
                 break;
-            case 3:
-                setGearStyle(R.id.gearN, true, COLOR_AMBER, Color.parseColor("#2E2500"));
+            case 3: // N
+                n.setTextColor(COLOR_AMBER);
+                n.setBackgroundColor(Color.parseColor("#2A3326"));
                 break;
-            case 4:
-                setGearStyle(R.id.gearD, true, COLOR_GREEN, Color.parseColor("#072B15"));
+            case 4: // D
+                d.setTextColor(COLOR_GREEN);
+                d.setBackgroundColor(Color.parseColor("#16362C"));
                 break;
         }
     }
 
-    private void setGearStyle(int viewId, boolean active, int textColor, int bgColor) {
-        TextView tv = findViewById(viewId);
-        if (tv == null) return;
-        GradientDrawable gd = new GradientDrawable();
-        gd.setCornerRadius(10f * getResources().getDisplayMetrics().density);
-        if (active) {
-            gd.setColor(bgColor);
-            gd.setStroke((int)(1.5f * getResources().getDisplayMetrics().density), textColor);
-            tv.setTextColor(textColor);
-        } else {
-            gd.setColor(BG_GEAR_INACTIVE);
-            gd.setStroke(0, Color.TRANSPARENT);
-            tv.setTextColor(COLOR_GEAR_INACTIVE);
-        }
-        tv.setBackground(gd);
-    }
+    private void updateAcUI() {
+        boolean isOn = acAuthorized || acRequested || (acPower > 25);
+        TextView tvDot = findViewById(R.id.textAcDot);
+        TextView tvState = findViewById(R.id.textAcState);
+        TextView tvSub = findViewById(R.id.textAcSub);
 
-    private void updateAc(String sid, double val) {
-        if (sid.equals(SID_AcPower_7EC)) {
-            acActive = (val > 50.0);
-            TextView details = findViewById(R.id.textAcDetails);
-            if (details != null) {
-                details.setText(acActive ? String.format(Locale.getDefault(), "Compressor: %.0f W", val) : "Compressor: Idle");
+        if (tvDot != null) {
+            tvDot.setTextColor(isOn ? COLOR_CYAN : COLOR_MUTED);
+        }
+        if (tvState != null) {
+            tvState.setText(isOn ? "ACTIVE" : "OFF");
+            tvState.setTextColor(isOn ? COLOR_CYAN : COLOR_MUTED);
+        }
+        if (tvSub != null) {
+            if (acPower > 0) {
+                tvSub.setText(String.format(Locale.getDefault(), "Power: %.0f W", acPower));
+            } else {
+                tvSub.setText(isOn ? "Compressor running" : "Compressor idle");
             }
-        } else if (sid.equals(SID_AcAuth_7EC) || sid.equals(SID_AcReq_7EC)) {
-            if (val >= 0.5) acActive = true;
-        }
-
-        TextView textAcDot = findViewById(R.id.textAcDot);
-        TextView textAcState = findViewById(R.id.textAcState);
-        if (textAcDot != null) textAcDot.setTextColor(acActive ? COLOR_CYAN : COLOR_MUTED);
-        if (textAcState != null) {
-            textAcState.setText(acActive ? "ON" : "OFF");
-            textAcState.setTextColor(acActive ? COLOR_CYAN : COLOR_MUTED);
         }
     }
 
