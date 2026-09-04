@@ -67,7 +67,7 @@ public class V8SoundEngine {
     public static final int ENGINE_STOPPING = 3;
 
     // Timing parameters for start/stop sequence
-    private static final float CRANK_TIME_S = 1.05f; // Starter duration before catch flare
+    private static final float CRANK_TIME_S = 0.65f; // Natural crank duration before catch flare
     private static final float STOP_TIME_S = 2.0f;   // Shutdown flywheel spin-down duration
 
     // Virtual manual transmission gear ratios
@@ -159,7 +159,6 @@ public class V8SoundEngine {
 
     // Mechanical start/stop synthesis state
     private float solenoidSnap = 0f;
-    private double starterMotorPhase = 0.0;
     private float clunkImpact = 0f;
     private float clunkRattle = 0f;
     private boolean clunkFired = false;
@@ -509,10 +508,10 @@ public class V8SoundEngine {
         if (engineState == ENGINE_RUNNING) {
             combustion = 0.40f + load * 0.90f;
         } else if (engineState == ENGINE_CRANKING) {
-            // Cylinders begin coughing/catching after 0.55s before full start
-            if (stateTimer > 0.55f) {
-                float catchProg = Math.min(1.0f, (stateTimer - 0.55f) / 0.45f);
-                combustion = catchProg * 0.60f;
+            // Cylinders begin catching naturally past mid-crank
+            if (stateTimer > 0.35f) {
+                float catchProg = Math.min(1.0f, (stateTimer - 0.35f) / 0.30f);
+                combustion = catchProg * 0.55f;
             }
         }
 
@@ -571,27 +570,18 @@ public class V8SoundEngine {
             // ------------------ MECHANICAL ACOUSTICS ------------------
             float mechanical = 0f;
 
-            // 1. Starter solenoid engage snap (crisp metallic click)
-            solenoidSnap *= 0.994f;
+            // 1. Subtle mechanical switch / relay click
+            solenoidSnap *= 0.990f;
             if (solenoidSnap > 0.001f) {
-                float snapNoise = (rng.nextFloat() - 0.5f) * 0.7f;
-                float snapImpulse = (float) Math.sin(i * 0.28) * 0.5f;
-                mechanical += (snapNoise + snapImpulse) * solenoidSnap * 0.85f;
+                float snapImpulse = (float) Math.sin(i * 0.18) * 0.30f;
+                mechanical += snapImpulse * solenoidSnap * 0.35f;
             }
 
-            // 2. Starter electric motor whine with compression cadence dips
+            // 2. Heavy mechanical rotation chug as pistons spin through compression
             if (engineState == ENGINE_CRANKING) {
-                float compressionDip = (float) Math.pow(Math.max(0, Math.sin(crankPhase * 4.0)), 4.0);
-                float starterFreq = 780f + currentRpm * 1.6f - compressionDip * 190f;
-                starterMotorPhase += starterFreq * TWO_PI / SAMPLE_RATE;
-                if (starterMotorPhase >= TWO_PI) starterMotorPhase -= TWO_PI;
-
-                float whine = (float) (Math.sin(starterMotorPhase) * 0.32
-                        + Math.sin(starterMotorPhase * 2.0) * 0.18
-                        + Math.sin(starterMotorPhase * 3.0) * 0.08);
-
-                float whineGain = Math.min(1.0f, stateTimer / 0.15f) * (1.0f - Math.max(0f, (stateTimer - 0.95f) / 0.10f));
-                mechanical += whine * whineGain * 0.38f;
+                float chugCadence = (float) Math.pow(Math.max(0, Math.sin(crankPhase * 4.0)), 3.0);
+                float rotationRumble = (float) Math.sin(i * 0.035) * 0.15f;
+                mechanical += (chugCadence * 0.26f + rotationRumble * 0.12f);
             }
 
             // 3. Shutdown mechanical valve/relay ticks
@@ -733,18 +723,16 @@ public class V8SoundEngine {
         stateTimer += FRAME_DT;
         currentGear = 0;
 
-        // Starter spins up to ~270 RPM with rhythmic compression dips
-        float targetCrank = 260f + (float) Math.sin(stateTimer * 28.0) * 35f;
-        if (stateTimer < 0.25f) {
-            targetCrank = (stateTimer / 0.25f) * 260f;
-        }
-        currentRpm += (targetCrank - currentRpm) * 0.18f;
+        // Flywheel turns over naturally: spins up to ~280 RPM with compression pulses
+        float progress = Math.min(1.0f, stateTimer / CRANK_TIME_S);
+        float targetCrank = 220f + progress * 80f + (float) Math.sin(stateTimer * 24.0) * 25f;
+        currentRpm += (targetCrank - currentRpm) * 0.22f;
 
         if (stateTimer >= CRANK_TIME_S) {
             engineState = ENGINE_RUNNING;
             stateTimer = 0f;
-            // Catch flare: jump to ~1.38x idle before settling down to idle
-            currentRpm = idleRpm * 1.38f;
+            // Catch flare: brief rev flare to ~1.30x idle before settling into steady idle
+            currentRpm = idleRpm * 1.30f;
         }
     }
 
