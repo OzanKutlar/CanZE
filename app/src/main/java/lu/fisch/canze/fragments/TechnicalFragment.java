@@ -73,7 +73,6 @@ public class TechnicalFragment extends Fragment {
         activateButton(view, R.id.buttonElmTest,                ElmTestActivity.class);
 
         activateButton(view, R.id.buttonChargingHistory,        ChargingHistActivity.class);
-        activateButton(view, R.id.buttonClimaTech,              ClimaTechActivity.class);
 
         activateButton(view, R.id.buttonLeakCurrents,           LeakCurrentsActivity.class);
         activateButton(view, R.id.buttonAuxBatt,                AuxBattTechActivity.class);

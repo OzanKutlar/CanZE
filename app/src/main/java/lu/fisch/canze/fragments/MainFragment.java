@@ -79,6 +79,7 @@ public class MainFragment extends Fragment {
         activateButton(view, R.id.buttonHeatmapCellvoltage, HeatmapCellvoltageActivity.class);
         activateButton(view, R.id.buttonHeatmapBatcomp,     HeatmapBatcompActivity.class);
         activateButton(view, R.id.buttonMotor,              MotorActivity.class);
+        activateButton(view, R.id.buttonClimate,            ClimateActivity.class);
 
         getNews(view);
 

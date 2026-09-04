@@ -79,7 +79,7 @@
             android:name=".activities.ChargingGraphActivity"
             android:label="@string/title_activity_charging_graph" />
         <activity
-            android:name=".activities.ClimaTechActivity"
+            android:name=".activities.ClimateActivity"
             android:label="@string/title_activity_clima_tech" />
         <activity
             android:name=".activities.PredictionActivity"

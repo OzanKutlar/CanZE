@@ -191,6 +191,21 @@
                         android:drawableLeft="@mipmap/button_drive"
                         android:drawableStart="@mipmap/button_drive"
                         android:layout_column="0" />
+
+                    <Button
+                        style="?android:attr/button"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:layout_height="fill_parent"
+                        android:layout_marginTop="4dp"
+                        android:layout_marginLeft="4dp"
+                        android:layout_marginRight="4dp"
+                        android:layout_marginBottom="4dp"
+                        android:text="@string/button_Climate"
+                        android:id="@+id/buttonClimate"
+                        android:drawableLeft="@mipmap/button_climate"
+                        android:drawableStart="@mipmap/button_climate"
+                        android:layout_column="1" />
                 </TableRow>
 
                 <TextView

@@ -65,10 +65,29 @@
 ,763,144,159,1,0,0,,2180,6180,ff,Version
 ,763,0,7,1,0,0,,14ffff,54,ff,Reset DTC
 ,763,0,23,1,0,0,,19023b,5902ff,ff,Query DTC
+,764,16,23,0.4,100,1,°C,2121,6121,ff,IH_EvapTemp
+,764,24,31,0.4,100,1,°C,2121,6121,ff,IH_InCarTemp
 ,764,26,35,0.1,400,0,°C,2121,6121,e2,IH_InCarTemp
 ,764,8,15,0.4,100,0,°C,2121,6121,5,IH_InCarTemp
+,764,32,39,0.5,0,0,%,2121,6121,ff,IH_RHumidity
 ,764,36,43,1,0,0,%,2121,6121,e2,IH_RHumidity
 ,764,16,23,1,0,0,%,2121,6121,5,IH_RHumidity
+,764,72,79,50,0,0,W/m²,2121,6121,ff,IH_RightSunshineSensor
+,764,80,87,50,0,0,W/m²,2121,6121,ff,IH_LeftSunshineSensor
+,764,88,95,1,0,0,rpm,2121,6121,ff,IH_BlowerSpeed
+,764,96,103,1,0,0,%,2121,6121,ff,OH_BlowerReq
+,764,104,111,0.1,0,1,V,2121,6121,ff,IH_Vbatt
+,764,104,111,0.4,0,0,%,2122,6122,ff,IH_NightDashLights
+,764,112,119,50,0,0,W/m²,2122,6122,ff,IH_RightSunshineSensor_22
+,764,120,127,50,0,0,W/m²,2122,6122,ff,IH_LeftSunshineSensor_22
+,764,128,135,1,40,0,°C,2122,6122,ff,IH_ExternalTemp_22
+,764,136,136,1,0,0,,2122,6122,ff,IH_ACCompAuthorized,0:Not Authorized;1:Authorized
+,764,144,151,0.2,0,1,bar,2122,6122,ff,IH_ACHighPressureSensor_22
+,764,152,159,1,40,0,°C,2122,6122,ff,IH_MotorTemp_22
+,764,17,23,1,0,0,%,2127,6127,ff,OH_FeetVentActrReq
+,764,41,47,1,0,0,%,2127,6127,ff,OH_RecyActrReq
+,764,65,71,1,0,0,%,2127,6127,ff,IH_FeetVentActrPosition
+,764,89,95,1,0,0,%,2127,6127,ff,IH_RecyActrPosition
 ,764,86,87,1,0,0,,2143,6143,ff,IH_EcoModeRequest,0:Unavailable Value;1:Eco mode requested;2:Eco mode not requested;3:Not used
 ,764,110,117,1,40,0,%,2143,6143,ff,IH_ExternalTemp
 ,764,134,142,.1,0,0,bar,2143,6143,ff,IH_ACHighPressureSensor
