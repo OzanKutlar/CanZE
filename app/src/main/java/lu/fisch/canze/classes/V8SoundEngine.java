@@ -67,8 +67,8 @@ public class V8SoundEngine {
 
     private static final float STOP_TIME_S = 2.2f; // Audible 2.2s flywheel wind-down duration
 
-    // Virtual manual transmission gear ratios
-    private static final float[] GEAR_RATIOS = {3.80f, 2.60f, 1.75f, 1.25f, 0.95f, 0.72f};
+    // Virtual manual transmission gear ratios: 1st gear (9.65) hits ~3000 RPM at 10 km/h purely for launch
+    private static final float[] GEAR_RATIOS = {9.65f, 2.60f, 1.75f, 1.25f, 0.95f, 0.72f};
     private static final float FINAL_DRIVE = 3.65f;
     private static final float REDLINE_RPM = 6600f;
 
