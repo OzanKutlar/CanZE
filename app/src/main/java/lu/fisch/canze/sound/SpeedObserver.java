@@ -64,9 +64,18 @@ public final class SpeedObserver {
     /** Keeps the learned bias from standing in for a broken torque signal. */
     private static final float MAX_BIAS_N = 2500f;
 
+    /**
+     * Bias models gradient, wind and load: persistent effects of a steady drive. A braking or
+     * coasting episode is none of those, so learning through one writes a transient into a term
+     * that then has to be unlearned over the following seconds of acceleration.
+     */
+    private static final float BIAS_FREEZE_TORQUE_NM = -2f;
+    private static final float BIAS_FREEZE_ACCEL_KMH_S = 3.0f;
+
     private float speedKmH = 0f;
     private float biasN = 0f;
     private float accelKmHPerSec = 0f;
+    private float lastTorqueNm = 0f;
 
     public float getSpeedKmH() {
         return speedKmH;
@@ -84,6 +93,7 @@ public final class SpeedObserver {
         this.speedKmH = Math.max(0f, speedKmH);
         this.biasN = 0f;
         this.accelKmHPerSec = 0f;
+        this.lastTorqueNm = 0f;
     }
 
     /**
@@ -94,6 +104,8 @@ public final class SpeedObserver {
      */
     public void predict(float torqueNm, float dt) {
         if (dt <= 0f || Float.isNaN(torqueNm)) return;
+
+        lastTorqueNm = torqueNm;
 
         final float speedMs = speedKmH / 3.6f;
 
@@ -137,8 +149,14 @@ public final class SpeedObserver {
         if (speedKmH < 0f) speedKmH = 0f;
 
         // A positive error means we are predicting too slow, so the modelled resistance is too
-        // high and the bias must come down.
-        biasN -= BETA_PER_S * error * dt * MASS_KG;
+        // high and the bias must come down. Learning is suspended while braking or decelerating
+        // hard, because the error under those conditions is a transient rather than the standing
+        // offset this term is meant to capture.
+        final boolean braking = lastTorqueNm < BIAS_FREEZE_TORQUE_NM;
+        final boolean decelerating = accelKmHPerSec < -BIAS_FREEZE_ACCEL_KMH_S;
+        if (!braking && !decelerating) {
+            biasN -= BETA_PER_S * error * dt * MASS_KG;
+        }
         if (biasN > MAX_BIAS_N) biasN = MAX_BIAS_N;
         if (biasN < -MAX_BIAS_N) biasN = -MAX_BIAS_N;
     }

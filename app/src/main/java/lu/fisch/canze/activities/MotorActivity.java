@@ -84,6 +84,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     private static final float SIM_REGEN_TORQUE_NM = 55f;
     private static final float SIM_MAX_SPEED_KMH = 180f;
     private static final float SIM_DEFAULT_THROTTLE = 20f;
+    private static final float SIM_COAST_STOP_KMH = 0.5f;
 
     // Test simulation state
     private boolean isTestRunning = false;
@@ -387,17 +388,17 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
                 if (!isTestRunning && !isTestStopping) return;
 
                 if (isTestStopping) {
-                    // Smooth coast-down deceleration
-                    simDrivePedal *= 0.70f; // Rapidly release pedal to 0%
-                    if (simDrivePedal < 0.1f) simDrivePedal = 0f;
+                    // Coast-down now runs through the same road-load model as acceleration, so
+                    // the reported speed and torque can no longer contradict each other. The old
+                    // branch dropped a flat 0.42 km/h per step (a constant 8.4 km/h/s at any
+                    // speed, which no car produces) while pinning torque at -20 Nm, a figure that
+                    // only accounts for about 2.6 km/h/s. SpeedObserver was being asked to fuse
+                    // two channels disagreeing by a factor of three and settled several km/h high
+                    // for the whole manoeuvre.
+                    testThrottleTarget = 0f;
+                    stepTestPhysics();
 
-                    // Mild coasting deceleration regen (-20 Nm)
-                    float targetDecelTorque = -20.0f;
-                    simDriveTorque += (targetDecelTorque - simDriveTorque) * 0.15f;
-
-                    // Smooth speed coast-down (~4 seconds to reach 0 km/h from 105 km/h)
-                    simDriveSpeed -= 0.42f;
-                    if (simDriveSpeed <= 0f) {
+                    if (simDriveSpeed < SIM_COAST_STOP_KMH) {
                         simDriveSpeed = 0f;
                         simDrivePedal = 0f;
                         simDriveTorque = 0f;

@@ -77,9 +77,25 @@ public class V8SoundEngine {
 
     private static final float MOTOR_PEAK_TORQUE_NM = 226f;
     private static final float MOTOR_TAPER_RPM = 3000f;
-    private static final float FULL_OVERRUN_NM = 80f;
+    // Retuned from 80. Full lift-off regen in the vehicle model is 55 Nm, so the old divisor
+    // meant the overrun signal never reached the top of its own range and the decel pops and
+    // fuelling cut were effectively switched off during the one manoeuvre they exist for.
+    private static final float FULL_OVERRUN_NM = 55f;
     private static final float STATIONARY_SPEED_KMH = 2.5f;
     private static final float STATIONARY_TORQUE_NM = 5f;
+
+    // Overrun and coast handling
+    private static final float COAST_UPSHIFT_BLOCK = 0.05f;
+    private static final float COAST_THROTTLE_CLOSED = 0.04f;
+    private static final float COAST_OVERRUN_SPEED_KMH = 8f;
+    private static final float COAST_OVERRUN_FLOOR = 0.45f;
+    private static final float COAST_DOWNSHIFT_RPM = 1150f;
+    private static final float COMBUSTION_OVERRUN_CUT = 0.90f;
+    private static final float BLIP_RATIO_GAIN = 0.55f;
+    private static final float BLIP_MAX_RPM = 650f;
+    private static final float OVERRUN_SLEW = 0.30f;
+    private static final float DRIVE_SLEW = 0.12f;
+    private static final float LAUNCH_SLEW = 0.28f;
 
     // Defaults for user-tunable parameters
     public static final float DEFAULT_IDLE_RPM = 780f;
@@ -316,6 +332,20 @@ public class V8SoundEngine {
         popEnvelope = 0f;
         lastPcm = 0f;
         silenceRampPos = 0;
+
+        // Drivetrain state. Without this a restart inherits the previous run's gear, overrun
+        // and learned observer bias, so the first second after ignition is computed from a
+        // speed estimate carried over from however the last run happened to end.
+        currentGear = 0;
+        effectiveLoad = 0f;
+        overrunAmount = 0f;
+        downshiftBlip = 0f;
+        shiftLockout = 0f;
+        cruiseTimer = 0f;
+        currentThrottle = 0f;
+        currentTorqueNm = 0f;
+        observer.reset(targetSpeedKmH);
+        currentSpeedKmH = targetSpeedKmH;
 
         bank1Dc.reset();
         bank2Dc.reset();
@@ -725,7 +755,8 @@ public class V8SoundEngine {
             smoothedLimiterCut += (targetLimiterCut - smoothedLimiterCut) * 0.035f;
             smoothedMasterVolume += (targetMaster - smoothedMasterVolume) * 0.008f;
 
-            final float gate = smoothedShiftCut * smoothedLimiterCut * (1f - 0.75f * overrun);
+            final float gate =
+                    smoothedShiftCut * smoothedLimiterCut * (1f - COMBUSTION_OVERRUN_CUT * overrun);
 
             float b1 = (float) CylinderPulse.bankOne(crankPhase) * combustion * gate;
             float b2 = (float) CylinderPulse.bankTwo(crankPhase) * combustion * gate;
@@ -947,11 +978,14 @@ public class V8SoundEngine {
         final float tremor = (rawThrottle > 0.02f) ? pedalWanderSmoothed : 0.0f;
         final float throttleWithTremor = Math.max(0.0f, Math.min(1.0f, rawThrottle + tremor));
 
+        // Falling edges were roughly three times slower than rising ones, which is backwards:
+        // a throttle plate slams shut faster than it opens and regen onset is near instant.
+        // The old 0.16f meant the engine kept sounding loaded for about 200 ms after a lift.
         final float throttleDelta = throttleWithTremor - currentThrottle;
-        currentThrottle += throttleDelta * (throttleDelta > 0f ? 0.45f : 0.16f);
+        currentThrottle += throttleDelta * (throttleDelta > 0f ? 0.45f : 0.34f);
 
         final float torqueDelta = targetTorqueNm - currentTorqueNm;
-        currentTorqueNm += torqueDelta * (torqueDelta > 0f ? 0.40f : 0.16f);
+        currentTorqueNm += torqueDelta * (torqueDelta > 0f ? 0.40f : 0.34f);
 
         downshiftBlip *= 0.90f;
         targetShiftCut += (1.0f - targetShiftCut) * 0.055f;
@@ -971,13 +1005,27 @@ public class V8SoundEngine {
 
         float overrun = -currentTorqueNm / FULL_OVERRUN_NM;
         if (overrun < 0f) overrun = 0f;
+
+        // A closed throttle at speed IS overrun, whatever the torque channel happens to report.
+        // Keying this purely off negative torque meant coasting at near-zero torque produced no
+        // engine braking character at all, when a shut throttle is exactly what defines it.
+        if (currentThrottle < COAST_THROTTLE_CLOSED && currentSpeedKmH > COAST_OVERRUN_SPEED_KMH
+                && overrun < COAST_OVERRUN_FLOOR) {
+            overrun = COAST_OVERRUN_FLOOR;
+        }
+
         if (overrun > 1f) overrun = 1f;
         overrunAmount = overrun;
     }
 
+    /**
+     * Regen torque cannot hold a car stationary, so a negative reading must not veto the handoff
+     * to idle. Taking the absolute value here kept runGearedDrive() alive down to walking pace
+     * and turned the entry into the idle lope into a step rather than a settle.
+     */
     private boolean isStationary() {
         return currentSpeedKmH < STATIONARY_SPEED_KMH
-                && Math.abs(currentTorqueNm) < STATIONARY_TORQUE_NM;
+                && currentTorqueNm < STATIONARY_TORQUE_NM;
     }
 
     private float availableTorqueNm() {
@@ -1130,7 +1178,12 @@ public class V8SoundEngine {
             targetLimiterCut = 1.0f;
             // Fast-attack slew rate (0.28f) on launch tip-in so revs snap to ~3000 RPM in ~150ms
             final boolean isLaunchSurge = currentSpeedKmH < 14f && target > currentRpm && effectiveLoad > 0.15f;
-            final float slewRate = isLaunchSurge ? 0.28f : 0.12f;
+            float slewRate = isLaunchSurge ? LAUNCH_SLEW : DRIVE_SLEW;
+            // On a closed throttle the crank is mechanically locked to the wheels through the
+            // driveline, so revs cannot lag road speed the way they can under power.
+            if (overrunAmount > COAST_UPSHIFT_BLOCK) {
+                slewRate = DRIVE_SLEW + (OVERRUN_SLEW - DRIVE_SLEW) * overrunAmount;
+            }
             currentRpm += (target - currentRpm) * slewRate;
         }
     }
@@ -1143,27 +1196,46 @@ public class V8SoundEngine {
         final float minSpeedForNext =
                 (currentGear < maxGear) ? MIN_UPSHIFT_SPEEDS[currentGear] : Float.MAX_VALUE;
 
-        if (gearRpm > upshiftRpm && currentGear < maxGear && currentSpeedKmH >= minSpeedForNext) {
+        // A trailing throttle must never climb the box. computeLoad() clamps negative torque to
+        // zero, so lifting collapsed effectiveLoad and dropped upshiftRpm to its 2200 floor while
+        // gearRpm was still up at cruising revs. Lifting at 90 km/h in 4th fired three upshifts
+        // in about 1.5 s, each stamping a shift cut into the audio, purely because of the lift.
+        final boolean driving = overrunAmount < COAST_UPSHIFT_BLOCK;
+
+        if (driving && gearRpm > upshiftRpm && currentGear < maxGear
+                && currentSpeedKmH >= minSpeedForNext) {
             currentGear++;
             targetShiftCut = 0.60f;
             shiftLockout = SHIFT_LOCKOUT_UP_S;
             return;
         }
 
-        // Downshifts based strictly on speed thresholds with deadband hysteresis
+        // Downshifts on speed thresholds with deadband hysteresis, plus a revs trigger
         if (currentGear > 1) {
             final float downshiftSpeed = MIN_DOWNSHIFT_SPEEDS[currentGear - 1];
+            final float currentRatio = GEAR_RATIOS[currentGear - 1];
             final float nextGearRatio = GEAR_RATIOS[currentGear - 2];
             final float rpmAfter = wheelRpm * FINAL_DRIVE * nextGearRatio;
 
             // 1. Coasting / Braking downshift: only when speed actually drops below the lower band threshold
             final boolean coastDown = currentSpeedKmH < downshiftSpeed && effectiveLoad < 0.28f;
-            // 2. Power kickdown: only in 3rd gear or higher (never kick down into 1st while driving in 2nd)
+            // 2. Revs decaying toward idle on a closed throttle. The step back up in engine speed
+            //    as each gear is taken is most of what deceleration actually sounds like, and the
+            //    speed thresholds alone were too coarse to produce it.
+            final boolean coastRpm =
+                    overrunAmount > COAST_UPSHIFT_BLOCK && gearRpm < COAST_DOWNSHIFT_RPM;
+            // 3. Power kickdown: only in 3rd gear or higher (never kick down into 1st while driving in 2nd)
             final boolean kickdown = currentGear > 2 && effectiveLoad > 0.50f && currentSpeedKmH < downshiftSpeed * 1.15f && rpmAfter < 4200f;
 
-            if ((coastDown || kickdown) && rpmAfter < REDLINE_RPM - 1000f) {
+            if ((coastDown || coastRpm || kickdown) && rpmAfter < REDLINE_RPM - 1000f) {
                 currentGear--;
-                downshiftBlip = kickdown ? 300f : 200f;
+                // Rev match the blip to the ratio step being taken rather than a flat constant,
+                // so a short step produces a small blip and a tall one a large blip.
+                float blip = gearRpm * ((nextGearRatio / currentRatio) - 1f) * BLIP_RATIO_GAIN;
+                if (kickdown) blip *= 1.35f;
+                if (blip < 0f) blip = 0f;
+                if (blip > BLIP_MAX_RPM) blip = BLIP_MAX_RPM;
+                downshiftBlip = blip;
                 shiftLockout = SHIFT_LOCKOUT_DOWN_S;
             }
         }
