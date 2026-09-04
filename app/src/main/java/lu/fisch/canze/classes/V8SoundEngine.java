@@ -829,9 +829,11 @@ public class V8SoundEngine {
 
         evaluateShift(wheelRpm, upshiftRpm);
 
-        final float slipFade = Math.max(0f, 1f - (currentSpeedKmH / slipFadeKmh));
-        final float slipCurve = slipFade * slipFade;
-        final float launchSlip = (float) Math.pow(effectiveLoad, 1.25) * stallFlashRpm * slipCurve;
+        // High-stall launch flare: holds revs high (~3000 RPM) at 0-5 km/h, then descends smoothly
+        final float flareSpeedProgress = Math.min(1.0f, currentSpeedKmH / Math.max(12f, slipFadeKmh * 0.75f));
+        final float flareDecay = 0.5f * (1.0f + (float) Math.cos(flareSpeedProgress * Math.PI));
+        final float launchLoad = Math.min(1.0f, (float) Math.sqrt(effectiveLoad) * 1.15f);
+        final float launchSlip = launchLoad * (2250f) * flareDecay;
         final float converterSlip = 1.018f + (effectiveLoad * 0.024f);
 
         if (rng.nextFloat() < 0.12f) {
@@ -872,7 +874,10 @@ public class V8SoundEngine {
         } else {
             isLimiterCut = false;
             targetLimiterCut = 1.0f;
-            currentRpm += (target - currentRpm) * 0.12f;
+            // Fast-attack slew rate (0.28f) on launch tip-in so revs snap to ~3000 RPM in ~150ms
+            final boolean isLaunchSurge = currentSpeedKmH < 14f && target > currentRpm && effectiveLoad > 0.15f;
+            final float slewRate = isLaunchSurge ? 0.28f : 0.12f;
+            currentRpm += (target - currentRpm) * slewRate;
         }
     }
 
