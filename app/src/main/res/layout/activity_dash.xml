@@ -1,325 +1,395 @@
-    <TableLayout xmlns:android="http://schemas.android.com/apk/res/android"
-        xmlns:tools="http://schemas.android.com/tools"
-        xmlns:custom="http://schemas.android.com/apk/res-auto"
-        android:keepScreenOn="true"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:paddingLeft="0dp"
-        android:paddingRight="0dp"
-        android:paddingTop="0dp"
-        android:paddingBottom="0dp"
-        tools:context="lu.fisch.canze.activities.DashActivity"
-        android:stretchColumns="3"
-        android:id="@+id/table"
-        >
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0B0F19"
+    android:fillViewport="true"
+    android:keepScreenOn="true"
+    tools:context="lu.fisch.canze.activities.DashActivity">
 
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- HEADER -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="@drawable/border"
-            android:orientation="vertical"
-            >
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="14dp">
 
-            <RelativeLayout
+            <View
+                android:layout_width="4dp"
+                android:layout_height="22dp"
+                android:background="#00E5FF"
+                android:layout_marginEnd="8dp"
+                android:layout_marginRight="8dp" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Dashboard"
+                android:textColor="#FFFFFF"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_gravity="start"
-                >
+                android:text="● LIVE TELEMETRY"
+                android:textColor="#00E5FF"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.1" />
+        </LinearLayout>
+
+        <!-- HERO SPEEDOMETER CARD (2 DECIMAL PLACES) -->
+        <LinearLayout
+            android:id="@+id/card_dash_speed"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_motor_card"
+            android:orientation="vertical"
+            android:gravity="center_horizontal"
+            android:padding="22dp"
+            android:layout_marginBottom="12dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="VEHICLE SPEED"
+                android:textColor="#8A99AD"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.1" />
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="bottom"
+                android:layout_marginTop="6dp">
+
+                <TextView
+                    android:id="@+id/textSpeed"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0.00"
+                    android:textColor="#FFFFFF"
+                    android:textSize="54sp"
+                    android:textStyle="bold"
+                    android:includeFontPadding="false" />
+
+                <TextView
+                    android:id="@+id/textSpeedUnit"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:layout_marginLeft="6dp"
+                    android:layout_marginBottom="10dp"
+                    android:text="km/h"
+                    android:textColor="#00E5FF"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- PRND GEAR SELECTOR STRIP -->
+        <LinearLayout
+            android:id="@+id/card_dash_gear"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_motor_card"
+            android:orientation="vertical"
+            android:padding="14dp"
+            android:layout_marginBottom="12dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="GEAR POSITION"
+                android:textColor="#8A99AD"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.1"
+                android:layout_marginBottom="10dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center">
+
+                <!-- PARK -->
+                <TextView
+                    android:id="@+id/gearP"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:layout_margin="3dp"
+                    android:background="#141D2C"
+                    android:gravity="center"
+                    android:text="P"
+                    android:textColor="#4A6572"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <!-- REVERSE -->
+                <TextView
+                    android:id="@+id/gearR"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:layout_margin="3dp"
+                    android:background="#141D2C"
+                    android:gravity="center"
+                    android:text="R"
+                    android:textColor="#4A6572"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <!-- NEUTRAL -->
+                <TextView
+                    android:id="@+id/gearN"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:layout_margin="3dp"
+                    android:background="#141D2C"
+                    android:gravity="center"
+                    android:text="N"
+                    android:textColor="#4A6572"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <!-- DRIVE -->
+                <TextView
+                    android:id="@+id/gearD"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:layout_margin="3dp"
+                    android:background="#141D2C"
+                    android:gravity="center"
+                    android:text="D"
+                    android:textColor="#4A6572"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- TWO-UP ROW: BATTERY % (2 DECIMALS) AND BATTERY TEMPERATURE -->
+        <LinearLayout
+            android:id="@+id/card_dash_battery"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:baselineAligned="false"
+            android:layout_marginBottom="12dp">
+
+            <!-- Battery Percentage Card -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="@drawable/bg_motor_card"
+                android:orientation="vertical"
+                android:padding="14dp"
+                android:layout_marginEnd="6dp"
+                android:layout_marginRight="6dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="BATTERY LEVEL"
+                    android:textColor="#8A99AD"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.05" />
+
                 <LinearLayout
-                    android:id="@+id/bar_torque"
-                    android:layout_width="fill_parent"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
-                    android:layout_marginTop="8dp"
-                    android:layout_marginLeft="8dp"
-                    android:layout_marginRight="8dp"
-                    android:layout_marginBottom="0dp"
-                    android:weightSum="3"
-                    >
+                    android:gravity="bottom"
+                    android:layout_marginTop="4dp">
 
-                    <LinearLayout
-                        android:layout_width="0dp"
+                    <TextView
+                        android:id="@+id/textSoc"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:orientation="vertical"
-                        android:layout_weight="1"
-                        >
+                        android:text="@string/default_Dash"
+                        android:textColor="#00E676"
+                        android:textSize="30sp"
+                        android:textStyle="bold"
+                        android:includeFontPadding="false" />
 
-                        <ProgressBar
-                            android:id="@+id/pb_driver_torque_request"
-                            style="?android:attr/progressBarStyleHorizontal"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_gravity="center_horizontal"
-                            android:minHeight="25dp"
-                            android:max="1536"
-                            android:progressDrawable="@drawable/progressbar_canze_decel"
-                            />
-
-
-                        <ProgressBar
-                            android:id="@+id/MaxBreakTorque"
-                            style="?android:attr/progressBarStyleHorizontal"
-                            android:layout_width="match_parent"
-                            android:layout_height="9dp"
-                            android:paddingTop="2dp"
-                            android:layout_gravity="center_horizontal"
-                            android:max="1536"
-                            android:progressDrawable="@drawable/progressbar_canze_decel_aim"
-                            />
-                    </LinearLayout>
-
-                    <ProgressBar
-                        android:id="@+id/MeanEffectiveAccTorque"
-                        style="?android:attr/progressBarStyleHorizontal"
-                        android:layout_width="0dp"
+                    <TextView
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_gravity="center_horizontal"
-                        android:minHeight="25dp"
-                        android:max="2048"
-                        android:layout_weight="2"
-                        android:progressDrawable="@drawable/progressbar_canze_accel"
-                        />
+                        android:layout_marginStart="4dp"
+                        android:layout_marginLeft="4dp"
+                        android:layout_marginBottom="4dp"
+                        android:text="%"
+                        android:textColor="#00E676"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
 
+                <ProgressBar
+                    android:id="@+id/progressSoc"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="6dp"
+                    android:layout_marginTop="6dp"
+                    android:max="10000"
+                    android:progress="0"
+                    android:progressDrawable="@drawable/motor_progress_soc" />
+            </LinearLayout>
+
+            <!-- Battery Temperature Card -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="@drawable/bg_motor_card"
+                android:orientation="vertical"
+                android:padding="14dp"
+                android:layout_marginStart="6dp"
+                android:layout_marginLeft="6dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="BATTERY TEMP"
+                    android:textColor="#8A99AD"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.05" />
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="bottom"
+                    android:layout_marginTop="4dp">
+
+                    <TextView
+                        android:id="@+id/textBatTemp"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/default_Dash"
+                        android:textColor="#00E5FF"
+                        android:textSize="30sp"
+                        android:textStyle="bold"
+                        android:includeFontPadding="false" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:layout_marginLeft="4dp"
+                        android:layout_marginBottom="4dp"
+                        android:text="°C"
+                        android:textColor="#00E5FF"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
                 </LinearLayout>
 
                 <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="25dp"
-                    android:text="@string/label_WheelTorque"
-                    android:layout_marginLeft="4dp"
-                    android:layout_marginStart="4dp"
-                    android:textColor="#000000"
-                    android:layout_alignRight="@+id/bar_torque"
-                    android:layout_alignEnd="@+id/bar_torque"
-                    android:layout_alignLeft="@+id/bar_torque"
-                    android:layout_alignStart="@+id/bar_torque"
-                    android:layout_alignTop="@+id/bar_torque"
-                    android:gravity="start"
-                    />
-
-                <TextView
-                    android:id="@+id/text_wheel_torque"
-                    android:layout_width="0dp"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="@string/unit_Nm"
-                    android:layout_marginRight="4dp"
-                    android:layout_marginEnd="4dp"
-                    android:textColor="#000000"
-                    android:layout_alignRight="@+id/bar_torque"
-                    android:layout_alignEnd="@+id/bar_torque"
-                    android:layout_alignLeft="@+id/bar_torque"
-                    android:layout_alignStart="@+id/bar_torque"
-                    android:layout_alignTop="@+id/bar_torque"
-                    android:layout_alignBottom="@+id/bar_torque"
-                    android:gravity="end"
-                    android:textStyle="bold"
-                    android:textSize="20sp" />
-            </RelativeLayout>
-
+                    android:layout_marginTop="8dp"
+                    android:text="HV Pack Temp"
+                    android:textColor="#607D8B"
+                    android:textSize="11sp" />
+            </LinearLayout>
         </LinearLayout>
 
-        <TableRow
-            android:layout_width="fill_parent"
-            android:layout_height="fill_parent"
+        <!-- AIR CONDITIONING (A/C) CARD -->
+        <LinearLayout
+            android:id="@+id/card_dash_ac"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_motor_card"
             android:orientation="horizontal"
-            android:layout_weight="1">
+            android:gravity="center_vertical"
+            android:padding="16dp"
+            android:layout_marginBottom="14dp">
 
+            <TextView
+                android:id="@+id/textAcDot"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="10dp"
+                android:layout_marginRight="10dp"
+                android:text="●"
+                android:textColor="#607D8B"
+                android:textSize="22sp" />
 
-
-            <lu.fisch.canze.widgets.WidgetView
+            <LinearLayout
                 android:layout_width="0dp"
+                android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:layout_height="fill_parent"
-                android:layout_margin="4dp"
-                custom:min="-30"
-                custom:max="70"
-                custom:majorTicks="10"
-                custom:minorTicks="5"
-                custom:fieldSID="1fd.48"
-                custom:widget="tacho"
-                custom:text="Power (kWh)"
-                />
+                android:orientation="vertical">
 
-            <lu.fisch.canze.widgets.WidgetView
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="fill_parent"
-                android:layout_margin="4dp"
-                custom:min="-20"
-                custom:max="20"
-                custom:majorTicks="5"
-                custom:minorTicks="1"
-                custom:fieldSID="800.6107.24"
-                custom:widget="tacho"
-                custom:text="Delta (km)"
-                />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="AIR CONDITIONING"
+                    android:textColor="#8A99AD"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1" />
 
-            <lu.fisch.canze.widgets.WidgetView
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="fill_parent"
-                android:layout_margin="4dp"
-                custom:min="0"
-                custom:max="140"
-                custom:majorTicks="10"
-                custom:minorTicks="5"
-                custom:fieldSID="5d7.0"
-                custom:widget="tacho"
-                custom:text="Speed (km/h)"
-                />
+                <TextView
+                    android:id="@+id/textAcDetails"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="Compressor: Idle"
+                    android:textColor="#607D8B"
+                    android:textSize="11sp" />
+            </LinearLayout>
 
-            <lu.fisch.canze.widgets.WidgetView
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="fill_parent"
-                android:layout_margin="4dp"
-                custom:min="-10"
-                custom:max="70"
-                custom:majorTicks="10"
-                custom:minorTicks="5"
-                custom:fieldSID="800.6104.24"
-                custom:widget="tacho"
-                custom:text="Consumption (kWh/100km)"
-                />
+            <TextView
+                android:id="@+id/textAcState"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="OFF"
+                android:textColor="#607D8B"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
-
-        </TableRow>
-<!--
-        <TableRow
-            android:id="@+id/tableRow1"
-            android:layout_width="fill_parent"
-            android:layout_height="fill_parent"
+        <!-- DEBUG LINE -->
+        <LinearLayout
             android:orientation="horizontal"
-            android:layout_weight="1">
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="4dp">
 
+            <TextView
+                android:text="@string/label_debug"
+                android:textColor="#546E7A"
+                android:textSize="11sp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
 
+            <TextView
+                android:id="@+id/textDebug"
+                android:text="@string/default_debug"
+                android:textColor="#546E7A"
+                android:textSize="11sp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
 
-            <lu.fisch.canze.widgets.WidgetView
-                android:id="@+id/w1"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="fill_parent"
-                android:layout_margin="4dp"
-                custom:min="0"
-                custom:max="100"
-                custom:majorTicks="10"
-                custom:minorTicks="2"
-                custom:fieldSID="654.24"
-                custom:widget="tacho"
-                custom:text="SOC (%)"
-                />
-
-            <lu.fisch.canze.widgets.WidgetView
-                android:id="@+id/w2"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="fill_parent"
-                android:layout_margin="4dp"
-                custom:min="0"
-                custom:max="150"
-                custom:majorTicks="10"
-                custom:minorTicks="5"
-                custom:fieldSID="654.42"
-                custom:widget="tacho"
-                custom:text="Estimated Distance (km)"
-                />
-
-            <lu.fisch.canze.widgets.WidgetView
-                android:id="@+id/w3"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="fill_parent"
-                android:layout_margin="4dp"
-                custom:min="0"
-                custom:max="24"
-                custom:majorTicks="4"
-                custom:minorTicks="2"
-                custom:fieldSID="42e.56"
-                custom:widget="tacho"
-                custom:text="Consumed energy (kWh)"
-                />
-
-
-        </TableRow>
-        <TableRow
-            android:id="@+id/tableRow2"
-            android:layout_width="fill_parent"
-            android:layout_height="fill_parent"
-            android:orientation="horizontal"
-            android:layout_weight="1">
-
-            <lu.fisch.canze.widgets.WidgetView
-                android:id="@+id/w4"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="fill_parent"
-                android:layout_margin="4dp"
-                custom:min="0"
-                custom:max="450"
-                custom:majorTicks="50"
-                custom:minorTicks="10"
-                custom:fieldSID="646.33"
-                custom:widget="tacho"
-                custom:text="Trip cons."
-                />
-
-            <lu.fisch.canze.widgets.WidgetView
-                android:id="@+id/w6"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="fill_parent"
-                android:layout_margin="4dp"
-                custom:min="0"
-                custom:max="32"
-                custom:majorTicks="8"
-                custom:minorTicks="2"
-                custom:fieldSID="637.0"
-                custom:widget="tacho"
-                custom:text="Mis. cons."
-                />
-
-        </TableRow>
-        <TableRow
-            android:id="@+id/tableRow3"
-            android:layout_width="fill_parent"
-            android:layout_height="fill_parent"
-            android:orientation="horizontal"
-            android:layout_weight="1">
-
-
-
-            <lu.fisch.canze.widgets.WidgetView
-                android:id="@+id/w5"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="fill_parent"
-                android:layout_margin="4dp"
-                custom:min="0"
-                custom:max="450"
-                custom:majorTicks="50"
-                custom:minorTicks="10"
-                custom:fieldSID="7bb.6161.136"
-                custom:widget="tacho"
-                custom:text="Bat. cons."
-                />
-
-            <lu.fisch.canze.widgets.WidgetView
-                android:id="@+id/w7"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="fill_parent"
-                android:layout_margin="4dp"
-                custom:min="-60"
-                custom:max="20"
-                custom:majorTicks="10"
-                custom:minorTicks="2"
-                custom:fieldSID="7ec.623204.24"
-                custom:widget="tacho"
-                custom:text="Requested Current (A)"
-                />
-
-        </TableRow>
--->
-    </TableLayout>
-
-
+    </LinearLayout>
+</ScrollView>
