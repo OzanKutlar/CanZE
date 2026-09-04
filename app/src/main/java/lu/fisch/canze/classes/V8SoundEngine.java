@@ -32,6 +32,7 @@ import lu.fisch.canze.sound.JitterFilter;
 import lu.fisch.canze.sound.LevelingFilter;
 import lu.fisch.canze.sound.LowPassFilter;
 import lu.fisch.canze.sound.PartitionedConvolver;
+import lu.fisch.canze.sound.PeakLimiter;
 import lu.fisch.canze.sound.SpeedObserver;
 
 /**
@@ -268,6 +269,7 @@ public class V8SoundEngine {
     private final LowPassFilter antiAlias = new LowPassFilter();
     private final DelayLine collectorDelay = new DelayLine();
     private final LevelingFilter leveling = new LevelingFilter();
+    private final PeakLimiter limiter = new PeakLimiter();
 
     private PartitionedConvolver convolver = null;
     private float[] dryBuffer = null;
@@ -407,6 +409,12 @@ public class V8SoundEngine {
         // combustion gate, which meant boosting the residual intake noise by the same factor.
         // 2.5 keeps idle audible without ever making the noise floor into the loudest thing.
         leveling.setRange(0.05f, 2.5f);
+
+        // Set below the soft knee so the limiter, not the knee, is what catches resonant peaks.
+        // Reaching the knee is already distortion; the point of the limiter is to get there far
+        // less often.
+        limiter.reset();
+        limiter.setThreshold(0.80f);
 
         final float[] ir = ImpulseResponseFactory.create(assetManager, IR_ASSET, IR_LENGTH, fs);
         convolver = new PartitionedConvolver(ir, CONV_BLOCK);
@@ -646,6 +654,7 @@ public class V8SoundEngine {
             float v = conv * wet[i] + dryAmount * dry[i];
 
             v = leveling.f(v);
+            v = limiter.f(v);
             v = antiAlias.f(v);
 
             double shaped = v * smoothedMasterVolume * INTERNAL_DRIVE;

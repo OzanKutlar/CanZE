@@ -38,8 +38,19 @@ public final class ImpulseResponseFactory {
 
     // Round trip pipe lengths in metres. Mutually non harmonic on purpose: integer ratios would
     // stack their resonances into a single pitched tone instead of a broadband body.
+    //
+    // These resonate near 412, 270, 200 and 144 Hz. A V8 firing fundamental is rpm/60*4, so the
+    // engine sweeps its fundamental straight across the middle two between roughly 2200 and
+    // 4000 rpm. That crossing is unavoidable for any pipe length inside the audible range, so
+    // what matters is how much energy the resonator can accumulate while it happens.
+    //
+    // The original feedback values gave these enough Q to build several times their normal
+    // amplitude when a strong harmonic parked on a peak, which drove the output stage into its
+    // clamp and produced crackle rather than resonance. Lower feedback and heavier damping is
+    // also the more honest model: a real silencer is a lossy, heavily damped cavity, not a
+    // ringing organ pipe.
     private static final float[] PIPE_LENGTHS_M = {0.83f, 1.27f, 1.71f, 2.39f};
-    private static final float[] PIPE_FEEDBACK = {0.84f, 0.81f, 0.78f, 0.74f};
+    private static final float[] PIPE_FEEDBACK = {0.62f, 0.59f, 0.56f, 0.52f};
 
     private static final int[] ALLPASS_DELAYS = {221, 75};
 
@@ -77,7 +88,7 @@ public final class ImpulseResponseFactory {
             if (delay < 2) delay = 2;
             combs[i] = new CombFilter(delay);
             combs[i].setFeedback(PIPE_FEEDBACK[i]);
-            combs[i].setDamping(0.34f);
+            combs[i].setDamping(0.48f);
         }
 
         final AllPassFilter[] allPasses = new AllPassFilter[ALLPASS_DELAYS.length];
@@ -104,7 +115,8 @@ public final class ImpulseResponseFactory {
 
             // Forces the tail to zero at the end of the buffer. Truncating a still ringing
             // response would put a step at the last tap, which convolves as a broadband click.
-            final float envelope = (float) Math.exp(-5.0 * i * invLength);
+            // Steeper than before, matching the shorter ring the damped combs now produce.
+            final float envelope = (float) Math.exp(-7.0 * i * invLength);
             ir[i] = y * envelope;
         }
 
