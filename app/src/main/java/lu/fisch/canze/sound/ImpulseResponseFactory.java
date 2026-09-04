@@ -38,8 +38,23 @@ public final class ImpulseResponseFactory {
 
     // Round trip pipe lengths in metres. Mutually non harmonic on purpose: integer ratios would
     // stack their resonances into a single pitched tone instead of a broadband body.
+    //
+    // These resonate at 343/length, so 413, 270, 201 and 144 Hz. The firing fundamental of a
+    // four stroke V8 is rpm/15, which sweeps 52 Hz at idle to 440 Hz at the limiter, so it
+    // crosses every one of them. There is nowhere to move these to that the excitation does not
+    // reach, and detuning is therefore not a fix.
     private static final float[] PIPE_LENGTHS_M = {0.83f, 1.27f, 1.71f, 2.39f};
-    private static final float[] PIPE_FEEDBACK = {0.84f, 0.81f, 0.78f, 0.74f};
+
+    // What can be fixed is how sharp the crossings are. At the previous values the steady state
+    // gain at resonance was around 1/(1-0.81), better than five times, and when the firing rate
+    // locked onto a loop period every pulse arrived in phase with the last one still decaying.
+    // The comb resonates at every multiple of its fundamental, so the derivative shaped pulse
+    // edges and the air noise were amplified along with the tone, and the result reached the
+    // output clamp and clipped. Lower feedback and heavier damping trade some pipe character
+    // for peaks that are broad rather than resonant.
+    private static final float[] PIPE_FEEDBACK = {0.62f, 0.60f, 0.57f, 0.54f};
+
+    private static final float PIPE_DAMPING = 0.55f;
 
     private static final int[] ALLPASS_DELAYS = {221, 75};
 
@@ -77,7 +92,7 @@ public final class ImpulseResponseFactory {
             if (delay < 2) delay = 2;
             combs[i] = new CombFilter(delay);
             combs[i].setFeedback(PIPE_FEEDBACK[i]);
-            combs[i].setDamping(0.34f);
+            combs[i].setDamping(PIPE_DAMPING);
         }
 
         final AllPassFilter[] allPasses = new AllPassFilter[ALLPASS_DELAYS.length];

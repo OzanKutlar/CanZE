@@ -32,6 +32,7 @@ import lu.fisch.canze.sound.JitterFilter;
 import lu.fisch.canze.sound.LevelingFilter;
 import lu.fisch.canze.sound.LowPassFilter;
 import lu.fisch.canze.sound.PartitionedConvolver;
+import lu.fisch.canze.sound.PeakLimiter;
 import lu.fisch.canze.sound.SpeedObserver;
 
 /**
@@ -208,6 +209,24 @@ public class V8SoundEngine {
     /** Base levelling target. Scaled down on overrun so quiet stays quiet. */
     private static final float LEVEL_TARGET = 0.70f;
 
+    // Fast safety limiter under the slow leveller. Catches resonant build up that the leveller
+    // is deliberately too slow to see.
+    private static final float LIMITER_CEILING = 0.88f;
+    private static final float LIMITER_ATTACK_MS = 1.5f;
+    private static final float LIMITER_RELEASE_MS = 120f;
+
+    // Derivative gain, normalised against engine speed.
+    //
+    // A combustion pulse occupies a fixed span of crank angle, so as engine speed rises the same
+    // lobe is traversed in less time and its slope grows in proportion. A fixed derivative gain
+    // therefore injects several times more high frequency energy at four thousand rpm than at
+    // one, which accumulates as harshness exactly where the pipe resonances are being driven
+    // hardest. Scaling the gain back above the reference speed keeps the edge character constant
+    // across the rev range instead of letting it pile up at the top.
+    private static final float DERIVATIVE_GAIN = 6f;
+    private static final float DERIVATIVE_REF_RPM = 2000f;
+    private static final float DERIVATIVE_GAIN_MIN = 1.5f;
+
     private Thread audioThread;
     private volatile boolean isRunning = false;
     private volatile boolean isMuted = false;
@@ -268,6 +287,7 @@ public class V8SoundEngine {
     private final LowPassFilter antiAlias = new LowPassFilter();
     private final DelayLine collectorDelay = new DelayLine();
     private final LevelingFilter leveling = new LevelingFilter();
+    private final PeakLimiter limiter = new PeakLimiter();
 
     private PartitionedConvolver convolver = null;
     private float[] dryBuffer = null;
@@ -381,8 +401,8 @@ public class V8SoundEngine {
         bank1Dc.initialize(12f, fs);
         bank2Dc.initialize(12f, fs);
 
-        bank1Derivative.setGain(6f);
-        bank2Derivative.setGain(6f);
+        bank1Derivative.setGain(DERIVATIVE_GAIN);
+        bank2Derivative.setGain(DERIVATIVE_GAIN);
 
         bank1AirNoise.setCutoff(1500f, fs);
         bank2AirNoise.setCutoff(1650f, fs);
@@ -407,6 +427,9 @@ public class V8SoundEngine {
         // combustion gate, which meant boosting the residual intake noise by the same factor.
         // 2.5 keeps idle audible without ever making the noise floor into the loudest thing.
         leveling.setRange(0.05f, 2.5f);
+
+        limiter.reset();
+        limiter.initialize(fs, LIMITER_CEILING, LIMITER_ATTACK_MS, LIMITER_RELEASE_MS);
 
         final float[] ir = ImpulseResponseFactory.create(assetManager, IR_ASSET, IR_LENGTH, fs);
         convolver = new PartitionedConvolver(ir, CONV_BLOCK);
@@ -529,6 +552,10 @@ public class V8SoundEngine {
         bank1Jitter.setScale(JITTER_MIN + load * (JITTER_MAX - JITTER_MIN));
         bank2Jitter.setScale(JITTER_MIN + load * (JITTER_MAX - JITTER_MIN));
 
+        final float derivativeGain = engineSpeedDerivativeGain();
+        bank1Derivative.setGain(derivativeGain);
+        bank2Derivative.setGain(derivativeGain);
+
         for (int i = 0; i < BUFFER_SIZE; i++) {
             crankPhase += crankRadPerSample;
             if (crankPhase >= CYCLE_RADIANS) {
@@ -575,6 +602,17 @@ public class V8SoundEngine {
 
             dry[i] = piped + pop + intake + sub;
         }
+    }
+
+    /**
+     * @return derivative gain for the current engine speed, never below DERIVATIVE_GAIN_MIN
+     */
+    private float engineSpeedDerivativeGain() {
+        final float rpm = currentRpm;
+        if (rpm <= DERIVATIVE_REF_RPM) return DERIVATIVE_GAIN;
+
+        final float scaled = DERIVATIVE_GAIN * DERIVATIVE_REF_RPM / rpm;
+        return (scaled < DERIVATIVE_GAIN_MIN) ? DERIVATIVE_GAIN_MIN : scaled;
     }
 
     /**
@@ -647,6 +685,7 @@ public class V8SoundEngine {
 
             v = leveling.f(v);
             v = antiAlias.f(v);
+            v = limiter.f(v);
 
             double shaped = v * smoothedMasterVolume * INTERNAL_DRIVE;
             shaped = softKnee(shaped);
