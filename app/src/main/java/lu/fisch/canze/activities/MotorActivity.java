@@ -341,17 +341,30 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
                 // Offset by 150: 0 -> -150 Nm, 150 -> 0 Nm, 400 -> +250 Nm
                 float simTorque = sbSimTorque.getProgress() - 150f;
 
-                tvSimSpeedLabel.setText(String.format(Locale.getDefault(), "Simulated Speed: %.0f km/h", simSpeed));
-                tvSimPedalLabel.setText(String.format(Locale.getDefault(), "Simulated Pedal: %.0f %%", simPedal));
+                updateSimulatorLabels(simSpeed, simPedal, simTorque);
 
-                String torqueStatus = simTorque < 0f ? "(Regen Braking)" : (simTorque > 120f ? "(Full Pull)" : "(Drive)");
-                tvSimTorqueLabel.setText(String.format(Locale.getDefault(), "Simulated Torque: %.0f Nm %s", simTorque, torqueStatus));
-
-                updateSpeed(simSpeed);
-                updatePedal(simPedal);
-                updateTorque(simTorque);
-                if (soundEngine != null) {
-                    soundEngine.setInputs(simSpeed, simPedal, simTorque);
+                if (isTestRunning || isTestStopping) {
+                    // If user manipulates the pedal during test drive, adjust throttle target
+                    if (seekBar == sbSimPedal) {
+                        testThrottleTarget = simPedal;
+                        // If user steps on the throttle while coasting, resume driving
+                        if (isTestStopping && simPedal > 5f) {
+                            isTestRunning = true;
+                            isTestStopping = false;
+                            updateTestDriveButton(1);
+                        }
+                    } else if (seekBar == sbSimSpeed) {
+                        simDriveSpeed = simSpeed;
+                    } else if (seekBar == sbSimTorque) {
+                        simDriveTorque = simTorque;
+                    }
+                } else {
+                    updateSpeed(simSpeed);
+                    updatePedal(simPedal);
+                    updateTorque(simTorque);
+                    if (soundEngine != null) {
+                        soundEngine.setInputs(simSpeed, simPedal, simTorque);
+                    }
                 }
             }
 
@@ -365,6 +378,34 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
         sbSimSpeed.setOnSeekBarChangeListener(simListener);
         sbSimPedal.setOnSeekBarChangeListener(simListener);
         sbSimTorque.setOnSeekBarChangeListener(simListener);
+    }
+
+    private void updateSimulatorLabels(float speed, float pedal, float torque) {
+        if (tvSimSpeedLabel != null) {
+            tvSimSpeedLabel.setText(String.format(Locale.getDefault(), "Simulated Speed: %.0f km/h", speed));
+        }
+        if (tvSimPedalLabel != null) {
+            tvSimPedalLabel.setText(String.format(Locale.getDefault(), "Simulated Pedal: %.0f %%", pedal));
+        }
+        if (tvSimTorqueLabel != null) {
+            String torqueStatus = torque < 0f ? "(Regen Braking)" : (torque > 120f ? "(Full Pull)" : "(Drive)");
+            tvSimTorqueLabel.setText(String.format(Locale.getDefault(), "Simulated Torque: %.0f Nm %s", torque, torqueStatus));
+        }
+    }
+
+    private void updateSimulatorControls(float speed, float pedal, float torque) {
+        if (sbSimSpeed != null) {
+            sbSimSpeed.setProgress((int) Math.max(0, Math.min(sbSimSpeed.getMax(), Math.round(speed))));
+        }
+        if (sbSimPedal != null) {
+            sbSimPedal.setProgress((int) Math.max(0, Math.min(sbSimPedal.getMax(), Math.round(pedal))));
+        }
+        if (sbSimTorque != null) {
+            // Offset by 150: 0 -> -150 Nm, 150 -> 0 Nm, 400 -> +250 Nm
+            int torqueProgress = Math.round(torque + 150f);
+            sbSimTorque.setProgress((int) Math.max(0, Math.min(sbSimTorque.getMax(), torqueProgress)));
+        }
+        updateSimulatorLabels(speed, pedal, torque);
     }
 
     @Override
@@ -413,6 +454,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
                 updateSpeed(simDriveSpeed);
                 updatePedal(simDrivePedal);
                 updateTorque(simDriveTorque);
+                updateSimulatorControls(simDriveSpeed, simDrivePedal, simDriveTorque);
 
                 if (soundEngine != null) {
                     soundEngine.setInputs(simDriveSpeed, simDrivePedal, simDriveTorque);
@@ -435,6 +477,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
                     simDrivePedal = 0f;
                     simDriveTorque = 0f;
                     testThrottleTarget = SIM_DEFAULT_THROTTLE;
+                    updateSimulatorControls(0f, 0f, 0f);
                     updateTestDriveButton(1);
                     testHandler.post(testRunnable);
                 } else if (isTestRunning) {
@@ -459,6 +502,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
         updatePedal(0f);
         updateSpeed(0f);
         updateTorque(0f);
+        updateSimulatorControls(0f, 0f, 0f);
         if (soundEngine != null) {
             soundEngine.setInputs(0f, 0f, 0f);
         }
