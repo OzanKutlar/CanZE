@@ -65,7 +65,7 @@ public class V8SoundEngine {
     public static final int ENGINE_RUNNING = 1;
     public static final int ENGINE_STOPPING = 2;
 
-    private static final float STOP_TIME_S = 1.8f; // Flywheel spin-down duration
+    private static final float STOP_TIME_S = 1.3f; // Smooth spin-down duration to 0 RPM
 
     // Virtual manual transmission gear ratios
     private static final float[] GEAR_RATIOS = {3.80f, 2.60f, 1.75f, 1.25f, 0.95f, 0.72f};
@@ -153,8 +153,6 @@ public class V8SoundEngine {
     private volatile int engineState = ENGINE_OFF;
     private float stateTimer = 0f;
     private float stopBaseRpm = 0f;
-    private float clunkImpact = 0f;
-    private boolean clunkFired = false;
 
     // Control state
     private final SpeedObserver observer = new SpeedObserver();
@@ -259,16 +257,13 @@ public class V8SoundEngine {
             if (engineState == ENGINE_OFF || engineState == ENGINE_STOPPING) {
                 engineState = ENGINE_RUNNING;
                 stateTimer = 0f;
-                clunkFired = false;
-                clunkImpact = 0f;
                 currentRpm = 0f; // Begin smooth spin-up to 1000 RPM
             }
         } else {
             if (engineState == ENGINE_RUNNING) {
                 engineState = ENGINE_STOPPING;
                 stateTimer = 0f;
-                stopBaseRpm = Math.max(currentRpm, 400f);
-                clunkFired = false;
+                stopBaseRpm = currentRpm;
             }
         }
     }
@@ -481,8 +476,7 @@ public class V8SoundEngine {
     /* ------------------------------------------------------------- synthesis */
 
     private void renderExcitation(float[] dry, float[] direct) {
-        // Complete silence when engine is off and shutdown thump has settled
-        if (engineState == ENGINE_OFF && clunkImpact < 0.001f) {
+        if (engineState == ENGINE_OFF) {
             Arrays.fill(dry, 0f);
             Arrays.fill(direct, 0f);
             return;
@@ -495,11 +489,14 @@ public class V8SoundEngine {
                 ((currentRpm * crankCycleFlutter) / 60.0) * TWO_PI / SAMPLE_RATE;
         final double firingRadPerSample = crankRadPerSample * SUB_BASS_ORDER;
 
-        // Fuelling combustion curve: smoothly ramps in on start, zero during stop
+        // Fuelling combustion curve: smoothly ramps in on start, smoothly fades out on stop
         float combustion = 0f;
         if (engineState == ENGINE_RUNNING) {
             float startGain = Math.min(1.0f, stateTimer / 0.45f);
             combustion = (0.40f + load * 0.90f) * startGain;
+        } else if (engineState == ENGINE_STOPPING) {
+            float stopGain = Math.max(0f, 1.0f - (stateTimer / STOP_TIME_S));
+            combustion = 0.35f * stopGain;
         }
 
         final float mix = edgeBiteIdle + load * (edgeBiteLoad - edgeBiteIdle);
@@ -545,15 +542,8 @@ public class V8SoundEngine {
             final float pop = popFilter.f(popEnvelope * (2f * rng.nextFloat() - 1f));
             final float sub = (float) Math.sin(subBassPhase) * subLevel;
 
-            // Clean terminal stop thump (105 Hz round bass thump, ZERO noise / static)
-            clunkImpact *= 0.9965f;
-            float clunk = 0f;
-            if (clunkImpact > 0.002f) {
-                clunk = (float) Math.sin(i * 0.015) * clunkImpact * 0.85f;
-            }
-
             dry[i] = piped;
-            direct[i] = pop + sub + clunk;
+            direct[i] = pop + sub;
         }
     }
 
@@ -592,7 +582,7 @@ public class V8SoundEngine {
     private final float[] blockScratchOut = new float[CONV_BLOCK];
 
     private void finishOutput(float[] dry, float[] wet, float[] direct, short[] out) {
-        if (engineState == ENGINE_OFF && clunkImpact < 0.001f) {
+        if (engineState == ENGINE_OFF) {
             Arrays.fill(out, (short) 0);
             return;
         }
@@ -600,11 +590,10 @@ public class V8SoundEngine {
         final float conv = CONV_MIN + effectiveLoad * (exhaustDepth - CONV_MIN);
         final float dryAmount = 1f - conv;
 
-        // Stop fade linearly drops the leveling target to 0 during shutdown so the AGC
-        // never amplifies the dying tail into crackling hiss.
+        // Linearly drops the leveling target to 0 during shutdown so AGC never boosts the quiet tail
         float stopFade = 1.0f;
         if (engineState == ENGINE_STOPPING) {
-            stopFade = Math.max(0f, 1.0f - (stateTimer / 1.5f));
+            stopFade = Math.max(0f, 1.0f - (stateTimer / STOP_TIME_S));
         } else if (engineState == ENGINE_OFF) {
             stopFade = 0f;
         }
@@ -681,19 +670,12 @@ public class V8SoundEngine {
         stateTimer += FRAME_DT;
         currentGear = 0;
 
-        // Flywheel spin-down against friction
-        stopBaseRpm *= (1.0f - 1.6f * FRAME_DT);
-        currentRpm = stopBaseRpm;
+        float progress = Math.min(1.0f, stateTimer / STOP_TIME_S);
+        // Organic cosine ease decay from current RPM to 0
+        float decay = (float) Math.cos(progress * Math.PI * 0.5);
+        currentRpm = stopBaseRpm * decay;
 
-        // Terminal soft compression halt below 45 RPM
-        if (!clunkFired && (stopBaseRpm < 45f || stateTimer >= 1.4f)) {
-            clunkFired = true;
-            clunkImpact = 0.8f;
-            stopBaseRpm = 0f;
-            currentRpm = 0f;
-        }
-
-        if (stateTimer >= STOP_TIME_S || (clunkFired && stateTimer > 1.65f)) {
+        if (progress >= 1.0f || currentRpm <= 15f) {
             currentRpm = 0f;
             stopBaseRpm = 0f;
             engineState = ENGINE_OFF;
