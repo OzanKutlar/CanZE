@@ -183,7 +183,17 @@ public class V8SoundEngine {
     private static final float JITTER_MIN = 0.55f;    // timing irregularity, strongest at idle
     private static final float JITTER_MAX = 0.18f;
 
-    private static final float POP_DECAY = 0.9992f;
+    // Decel pops.
+    //
+    // POP_RATE_HZ is a rate, converted to a per sample probability below. The previous version
+    // compared a per sample random draw against a constant intended as a per frame probability,
+    // which fired roughly 176 times a second and held the envelope permanently open. Combined
+    // with an unfiltered noise source that produced continuous broadband static rather than
+    // occasional pops.
+    private static final float POP_RATE_HZ = 6.0f;
+    private static final float POP_DECAY = 0.9981f;   // about 12 ms
+    private static final float POP_LEVEL = 0.35f;
+    private static final float POP_MIN_RPM = 1200f;   // no pops just above idle
 
     // Output stage, in normalised full scale units.
     private static final double PCM_FULL_SCALE = 31500.0;
@@ -194,6 +204,9 @@ public class V8SoundEngine {
 
     /** Notify the gauge at ~10.8 Hz rather than at the 86 Hz control rate. */
     private static final int LISTENER_DIVIDER = 8;
+
+    /** Base levelling target. Scaled down on overrun so quiet stays quiet. */
+    private static final float LEVEL_TARGET = 0.70f;
 
     private Thread audioThread;
     private volatile boolean isRunning = false;
@@ -251,6 +264,7 @@ public class V8SoundEngine {
     private final LowPassFilter bank1AirNoise = new LowPassFilter();
     private final LowPassFilter bank2AirNoise = new LowPassFilter();
     private final LowPassFilter intakeNoise = new LowPassFilter();
+    private final LowPassFilter popFilter = new LowPassFilter();
     private final LowPassFilter antiAlias = new LowPassFilter();
     private final DelayLine collectorDelay = new DelayLine();
     private final LevelingFilter leveling = new LevelingFilter();
@@ -260,6 +274,7 @@ public class V8SoundEngine {
     private float[] wetBuffer = null;
 
     private float popEnvelope = 0f;
+    private static final float popProbabilityPerSample = POP_RATE_HZ / (float) SAMPLE_RATE;
     private float smoothedMasterVolume = 0f;
 
     private final Random rng = new Random();
@@ -372,14 +387,26 @@ public class V8SoundEngine {
         bank1AirNoise.setCutoff(1500f, fs);
         bank2AirNoise.setCutoff(1650f, fs);
         intakeNoise.setCutoff(420f, fs);
-        antiAlias.setCutoff(fs * 0.45f, fs);
+
+        // Band limits the pop into a thump. An exhaust bang has its energy in the low mids; a
+        // full bandwidth burst reads as a spark or a click rather than as combustion.
+        popFilter.setCutoff(900f, fs);
+
+        // A real corner rather than the reference 0.45 * fs, which sits so close to Nyquist it
+        // filters nothing. There is no engine content above this, and every noise source in the
+        // chain benefits from losing its top octave.
+        antiAlias.setCutoff(7500f, fs);
 
         collectorDelay.initialize(HEADER_DELAY + 8);
         collectorDelay.setDelay(HEADER_DELAY);
 
         leveling.reset();
-        leveling.setTarget(0.70f);
-        leveling.setRange(0.05f, 8.0f);
+        leveling.setTarget(LEVEL_TARGET);
+
+        // The old 8.0 ceiling let the leveller recover the full amplitude drop of the overrun
+        // combustion gate, which meant boosting the residual intake noise by the same factor.
+        // 2.5 keeps idle audible without ever making the noise floor into the loudest thing.
+        leveling.setRange(0.05f, 2.5f);
 
         final float[] ir = ImpulseResponseFactory.create(assetManager, IR_ASSET, IR_LENGTH, fs);
         convolver = new PartitionedConvolver(ir, CONV_BLOCK);
@@ -531,11 +558,17 @@ public class V8SoundEngine {
             final float piped = collectorDelay.f(collector);
 
             // Decel pops: unburnt mixture igniting in a hot pipe on the overrun.
+            //
+            // The trigger probability is a rate divided by the sample rate, so POP_RATE_HZ means
+            // what it says no matter what buffer or sample rate this runs at.
             popEnvelope *= POP_DECAY;
-            if (overrun > 0.05f && rng.nextFloat() < overrun * 0.004f) {
-                popEnvelope = overrun * 0.9f;
+            if (overrun > 0.05f && currentRpm > POP_MIN_RPM
+                    && rng.nextFloat() < overrun * popProbabilityPerSample) {
+                popEnvelope = overrun * POP_LEVEL;
             }
-            final float pop = popEnvelope * (2f * rng.nextFloat() - 1f);
+            // Enveloped noise through a low pass, so each event is a band limited crack instead
+            // of a burst of hiss.
+            final float pop = popFilter.f(popEnvelope * (2f * rng.nextFloat() - 1f));
 
             final float intake = intakeNoise.f(2f * rng.nextFloat() - 1f) * intakeLevel;
             final float sub = (float) Math.sin(subBassPhase) * subLevel;
@@ -583,18 +616,15 @@ public class V8SoundEngine {
         }
     }
 
+    /**
+     * Copies one block in and out around the fixed size convolver call. CONV_BLOCK is small
+     * enough that the two copies stay well inside budget, and it keeps the convolver interface
+     * free of offsets.
+     */
     private void convolveBlock(float[] dry, float[] wet, int offset) {
-        // The convolver works on block aligned arrays, so hand it a view via the shared scratch.
-        final float[] in = new float[0]; // never used, kept out of the loop below
-        if (in.length != 0) return;
-
-        // Copy in and out around the fixed size call. CONV_BLOCK is small and this stays well
-        // inside budget, while keeping the convolver interface simple and index error free.
-        final float[] blockIn = blockScratchIn;
-        final float[] blockOut = blockScratchOut;
-        System.arraycopy(dry, offset, blockIn, 0, CONV_BLOCK);
-        convolver.process(blockIn, blockOut);
-        System.arraycopy(blockOut, 0, wet, offset, CONV_BLOCK);
+        System.arraycopy(dry, offset, blockScratchIn, 0, CONV_BLOCK);
+        convolver.process(blockScratchIn, blockScratchOut);
+        System.arraycopy(blockScratchOut, 0, wet, offset, CONV_BLOCK);
     }
 
     private final float[] blockScratchIn = new float[CONV_BLOCK];
@@ -606,6 +636,11 @@ public class V8SoundEngine {
     private void finishOutput(float[] dry, float[] wet, short[] out) {
         final float conv = CONV_MIN + effectiveLoad * (CONV_MAX - CONV_MIN);
         final float dryAmount = 1f - conv;
+
+        // Overrun is meant to be quieter than full load. Holding a constant target told the
+        // leveller to undo that, so it went looking for whatever was left to amplify, which on
+        // the overrun is the intake noise floor.
+        leveling.setTarget(LEVEL_TARGET * (1f - 0.45f * overrunAmount));
 
         for (int i = 0; i < BUFFER_SIZE; i++) {
             float v = conv * wet[i] + dryAmount * dry[i];

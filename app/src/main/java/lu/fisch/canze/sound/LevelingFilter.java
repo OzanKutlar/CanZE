@@ -26,8 +26,15 @@ package lu.fisch.canze.sound;
  */
 public final class LevelingFilter {
 
-    private static final float PEAK_DECAY = 0.99985f;   // about 100 ms at 44.1 kHz
-    private static final float GAIN_SMOOTH = 0.001f;    // about 23 ms at 44.1 kHz
+    // Both constants are far slower than the engine simulator reference.
+    //
+    // At 23 ms the gain could track the amplitude collapse of a regeneration event almost
+    // instantly, restoring the level by amplifying whatever noise remained. Automatic gain that
+    // reacts faster than the musical gesture it is sitting under will always find the noise
+    // floor. Making it slower than the gesture means genuine dynamics survive and only long
+    // term drift is corrected.
+    private static final float PEAK_DECAY = 0.99997f;    // about 750 ms at 44.1 kHz
+    private static final float GAIN_SMOOTH = 0.00015f;   // about 150 ms at 44.1 kHz
 
     private float peak = 1f;
     private float attenuation = 1f;
