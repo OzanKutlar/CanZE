@@ -99,7 +99,10 @@ public class V8SoundEngine {
     private static final float LIMITER_CUT_DECEL_RPM_S = 4600f;
     private static final float LIMITER_CUT_MIN_TIME_S = 0.045f;
     private static final float[] MIN_UPSHIFT_SPEEDS = {0f, 12f, 30f, 48f, 68f, 88f, 108f};
-    private static final float SHIFT_LOCKOUT_S = 0.8f;
+    // Prompt downshift speeds: 2->1 happens at 10.5 km/h so 1st gear is ready before full stop
+    private static final float[] MIN_DOWNSHIFT_SPEEDS = {0f, 10.5f, 26f, 43f, 62f, 82f, 102f};
+    private static final float SHIFT_LOCKOUT_UP_S = 0.70f;
+    private static final float SHIFT_LOCKOUT_DOWN_S = 0.45f; // Faster lockout for braking
 
     private static final float CRUISE_ACCEL_THRESHOLD = 1.2f;
     private static final float CRUISE_ENGAGE_S = 1.0f;
@@ -892,22 +895,25 @@ public class V8SoundEngine {
         if (gearRpm > upshiftRpm && currentGear < maxGear && currentSpeedKmH >= minSpeedForNext) {
             currentGear++;
             targetShiftCut = 0.60f;
-            shiftLockout = SHIFT_LOCKOUT_S;
+            shiftLockout = SHIFT_LOCKOUT_UP_S;
             return;
         }
 
-        // Downshifts happen only while coasting or regenerating.
-        // Lock out downshift into 1st while moving (>7 km/h) to avoid coast-down RPM spikes.
-        final float downshiftRpm = 1450f;
-        if (gearRpm < downshiftRpm && currentGear > 1 && effectiveLoad < 0.12f) {
-            if (currentGear == 2 && currentSpeedKmH > 7.0f) {
-                return; // Coast in 2nd gear down to walking speed
-            }
-            final float after = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 2];
-            if (after < REDLINE_RPM - 1200f) {
+        // Prompt downshifts using speed thresholds + RPM floor check
+        if (currentGear > 1) {
+            final float speedThreshold = MIN_DOWNSHIFT_SPEEDS[currentGear - 1];
+            final float nextGearRatio = GEAR_RATIOS[currentGear - 2];
+            final float rpmAfter = wheelRpm * FINAL_DRIVE * nextGearRatio;
+
+            // 1. Coasting / Braking downshift (speed dips below gear band or RPM drops below 1650)
+            final boolean coastDown = (currentSpeedKmH < speedThreshold || gearRpm < 1650f) && effectiveLoad < 0.28f;
+            // 2. Power kickdown (driver hits throttle >45% in too tall a gear)
+            final boolean kickdown = effectiveLoad > 0.45f && rpmAfter < 4200f && currentSpeedKmH < speedThreshold * 1.08f;
+
+            if ((coastDown || kickdown) && rpmAfter < REDLINE_RPM - 1000f) {
                 currentGear--;
-                downshiftBlip = 220f;
-                shiftLockout = SHIFT_LOCKOUT_S;
+                downshiftBlip = kickdown ? 340f : 220f; // Sharper blip on kickdown
+                shiftLockout = SHIFT_LOCKOUT_DOWN_S;
             }
         }
     }
