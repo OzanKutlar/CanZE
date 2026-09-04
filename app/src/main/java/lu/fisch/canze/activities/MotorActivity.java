@@ -18,10 +18,16 @@
 package lu.fisch.canze.activities;
 
 import android.animation.ObjectAnimator;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.animation.DecelerateInterpolator;
 import android.widget.Button;
+import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -154,8 +160,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
             public void onClick(View v) {
                 boolean nowMuted = !soundEngine.isMuted();
                 soundEngine.setMuted(nowMuted);
-                btnSoundToggle.setText(nowMuted ? "🔇 V8 SOUND: OFF" : "🔊 V8 SOUND: ON");
-                btnSoundToggle.setTextColor(nowMuted ? 0xFF8A99AD : 0xFF00E5FF);
+                updateSoundButton(nowMuted);
             }
         });
 
@@ -168,11 +173,79 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
         animateEntrance();
     }
 
-    /**
-     * Configures the ignition switch, settings modal button, and UI visibility cleanup.
-     * Hides the volume card (now inside Settings) and the test throttle slider when connected.
-     */
-    private void initAuxControls() {
+    private int dp(int dps) {
+        return (int) (dps * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private void updateButtonStyle(Button btn, String text, int accentColor, int bgColor) {
+        if (btn == null) return;
+        btn.setText(text);
+        btn.setTextColor(accentColor);
+        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        btn.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        btn.setAllCaps(false);
+        btn.setGravity(Gravity.CENTER);
+        btn.setMinHeight(0);
+        btn.setMinimumHeight(0);
+        btn.setMinWidth(0);
+        btn.setMinimumWidth(0);
+        int padH = dp(6);
+        int padV = dp(8);
+        btn.setPadding(padH, padV, padH, padV);
+
+        GradientDrawable gd = new GradientDrawable();
+        gd.setShape(GradientDrawable.RECTANGLE);
+        gd.setCornerRadius(dp(8));
+        gd.setColor(bgColor);
+        gd.setStroke(dp(1), accentColor);
+        btn.setBackground(gd);
+    }
+
+    private void updateIgnitionButton(boolean on) {
+        if (btnIgnition == null) return;
+        if (on) {
+            updateButtonStyle(btnIgnition, "🔑 IGNITION: ON", 0xFF00E5FF, 0xFF0D2838);
+        } else {
+            updateButtonStyle(btnIgnition, "🔑 IGNITION: OFF", 0xFF8A99AD, 0xFF161F2E);
+        }
+    }
+
+    private void updateSoundButton(boolean muted) {
+        if (btnSoundToggle == null) return;
+        if (muted) {
+            updateButtonStyle(btnSoundToggle, "🔇 SOUND: OFF", 0xFF8A99AD, 0xFF161F2E);
+        } else {
+            updateButtonStyle(btnSoundToggle, "🔊 SOUND: ON", 0xFF00E5FF, 0xFF0D2838);
+        }
+    }
+
+    private void updateTestDriveButton(int state) {
+        if (btnTestDrive == null) return;
+        switch (state) {
+            case 1: // Running
+                updateButtonStyle(btnTestDrive, "⏹ STOP TEST", 0xFFFF5252, 0xFF2A151B);
+                break;
+            case 2: // Coasting
+                updateButtonStyle(btnTestDrive, "⏳ COASTING...", 0xFF00E5FF, 0xFF0D2838);
+                break;
+            case 0: // Idle
+            default:
+                updateButtonStyle(btnTestDrive, "▶ TEST DRIVE", 0xFFFFD600, 0xFF161F2E);
+                break;
+        }
+    }
+
+    private LinearLayout.LayoutParams makeButtonLayoutParams(boolean isLeft) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(40), 1.0f);
+        if (isLeft) {
+            lp.rightMargin = dp(4);
+        } else {
+            lp.leftMargin = dp(4);
+        }
+        return lp;
+    }
+
+    private void refreshCardVisibilities() {
         View cardVolume = findViewById(R.id.card_volume);
         if (cardVolume != null) {
             cardVolume.setVisibility(View.GONE);
@@ -184,14 +257,32 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
             cardTestThrottle.setVisibility(disconnected ? View.VISIBLE : View.GONE);
         }
 
-        if (btnSoundToggle == null) return;
-        android.view.ViewGroup parent = (android.view.ViewGroup) btnSoundToggle.getParent();
+        if (cardSimulator != null) {
+            cardSimulator.setVisibility((disconnected || MainActivity.debugLogMode) ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    /**
+     * Reorganises action controls into a compact, futuristic 2x2 cockpit grid.
+     */
+    private void initAuxControls() {
+        refreshCardVisibilities();
+
+        if (btnSoundToggle == null || btnTestDrive == null) return;
+        ViewGroup parent = (ViewGroup) btnSoundToggle.getParent();
         if (parent == null) return;
 
+        int idx = parent.indexOfChild(btnSoundToggle);
+        if (idx < 0) idx = 0;
+
+        parent.removeView(btnSoundToggle);
+        parent.removeView(btnTestDrive);
+
+        if (parent instanceof LinearLayout) {
+            ((LinearLayout) parent).setOrientation(LinearLayout.VERTICAL);
+        }
+
         btnIgnition = new Button(this);
-        btnIgnition.setText("🔑 IGNITION: OFF");
-        btnIgnition.setTextColor(0xFF8A99AD);
-        btnIgnition.setAllCaps(false);
         btnIgnition.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -199,15 +290,11 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
                 int state = soundEngine.getEngineState();
                 boolean turnOn = (state == V8SoundEngine.ENGINE_OFF || state == V8SoundEngine.ENGINE_STOPPING);
                 soundEngine.setIgnition(turnOn);
-                btnIgnition.setText(turnOn ? "🔑 IGNITION: ON" : "🔑 IGNITION: OFF");
-                btnIgnition.setTextColor(turnOn ? 0xFF00E5FF : 0xFF8A99AD);
+                updateIgnitionButton(turnOn);
             }
         });
 
         Button btnSettings = new Button(this);
-        btnSettings.setText("⚙ V8 SETTINGS");
-        btnSettings.setTextColor(0xFF8A99AD);
-        btnSettings.setAllCaps(false);
         btnSettings.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -215,10 +302,42 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
             }
         });
 
-        int idx = parent.indexOfChild(btnSoundToggle);
-        if (idx < 0) idx = parent.getChildCount();
-        parent.addView(btnIgnition, idx);
-        parent.addView(btnSettings, Math.min(idx + 2, parent.getChildCount()));
+        // Row 1: [ Ignition ]  [ Sound Toggle ]
+        LinearLayout row1 = new LinearLayout(this);
+        row1.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams row1Lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        row1Lp.topMargin = dp(8);
+        row1Lp.bottomMargin = dp(4);
+        row1.setLayoutParams(row1Lp);
+
+        btnIgnition.setLayoutParams(makeButtonLayoutParams(true));
+        btnSoundToggle.setLayoutParams(makeButtonLayoutParams(false));
+        row1.addView(btnIgnition);
+        row1.addView(btnSoundToggle);
+
+        // Row 2: [ Settings ]  [ Test Drive ]
+        LinearLayout row2 = new LinearLayout(this);
+        row2.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams row2Lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        row2Lp.topMargin = dp(4);
+        row2Lp.bottomMargin = dp(8);
+        row2.setLayoutParams(row2Lp);
+
+        btnSettings.setLayoutParams(makeButtonLayoutParams(true));
+        btnTestDrive.setLayoutParams(makeButtonLayoutParams(false));
+        row2.addView(btnSettings);
+        row2.addView(btnTestDrive);
+
+        // Apply styled visuals
+        updateIgnitionButton(soundEngine != null && (soundEngine.getEngineState() == V8SoundEngine.ENGINE_RUNNING || soundEngine.getEngineState() == V8SoundEngine.ENGINE_CRANKING));
+        updateSoundButton(soundEngine != null && soundEngine.isMuted());
+        updateButtonStyle(btnSettings, "⚙ SETTINGS", 0xFF8A99AD, 0xFF161F2E);
+        updateTestDriveButton(0);
+
+        parent.addView(row1, Math.min(idx, parent.getChildCount()));
+        parent.addView(row2, Math.min(idx + 1, parent.getChildCount()));
     }
 
     /**
@@ -339,6 +458,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     @Override
     protected void onResume() {
         super.onResume();
+        refreshCardVisibilities();
         if (soundEngine != null) {
             soundEngine.start();
         }
@@ -368,10 +488,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
                         simDrivePedal = 0f;
                         simDriveTorque = 0f;
                         isTestStopping = false;
-                        if (btnTestDrive != null) {
-                            btnTestDrive.setText("▶ TEST DRIVE");
-                            btnTestDrive.setTextColor(0xFFFFD600); // Yellow when idle
-                        }
+                        updateTestDriveButton(0);
                     }
                 } else {
                     // Live throttle: read the slider every step so the pedal can be moved mid-test
@@ -405,8 +522,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
                     if (sbTestThrottle != null) {
                         testThrottleTarget = sbTestThrottle.getProgress();
                     }
-                    btnTestDrive.setText("⏹ STOP TEST");
-                    btnTestDrive.setTextColor(0xFFFF5252); // Red when active
+                    updateTestDriveButton(1);
                     testHandler.post(testRunnable);
                 } else if (isTestRunning) {
                     // Begin smooth coast-down deceleration
@@ -419,20 +535,14 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     private void startCoastDown() {
         isTestRunning = false;
         isTestStopping = true;
-        if (btnTestDrive != null) {
-            btnTestDrive.setText("⏳ COASTING...");
-            btnTestDrive.setTextColor(0xFF00E5FF); // Cyan while decelerating
-        }
+        updateTestDriveButton(2);
     }
 
     private void forceStopTest() {
         isTestRunning = false;
         isTestStopping = false;
         testHandler.removeCallbacks(testRunnable);
-        if (btnTestDrive != null) {
-            btnTestDrive.setText("▶ TEST DRIVE");
-            btnTestDrive.setTextColor(0xFFFFD600);
-        }
+        updateTestDriveButton(0);
         updatePedal(0f);
         updateSpeed(0f);
         updateTorque(0f);
@@ -472,7 +582,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
         long delay = 50;
         for (int id : cardIds) {
             final android.view.View v = findViewById(id);
-            if (v != null) {
+            if (v != null && v.getVisibility() == View.VISIBLE) {
                 v.setAlpha(0f);
                 v.setTranslationY(40f);
                 v.animate()
