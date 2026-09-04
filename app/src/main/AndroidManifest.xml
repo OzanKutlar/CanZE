@@ -106,6 +106,9 @@
         <activity
             android:name=".activities.MotorActivity"
             android:label="@string/title_activity_motor" />
+        <activity
+            android:name=".activities.PebActivity"
+            android:label="Powertrain" />
         <activity android:name=".activities.CanSeeActivity"></activity>
     </application>
 

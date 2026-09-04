@@ -81,6 +81,8 @@ public class TechnicalFragment extends Fragment {
         activateButton(view, R.id.buttonRange,                  RangeActivity.class);
         activateButton(view, R.id.buttonAllData,                AllDataActivity.class);
 
+        activateButton(view, R.id.buttonPeb,                    lu.fisch.canze.activities.PebActivity.class);
+
         return view;
     }
 

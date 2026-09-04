@@ -118,7 +118,14 @@
 ,77e,0,7,1,0,0,,14ffff,54,ff,Reset DTC
 ,77e,0,23,1,0,0,,19023b,5902ff,ff,Query DTC
 ,77e,24,39,0.015625,0,2,ºC,223018,623018,ff,DCDC converter temperature
-,77e,24,31,0.015625,0,2,°C,22302b,62302b,ff,inverter temperature
+,77e,24,39,0.015625,0,2,°C,22302b,62302b,1ff,inverter temperature
+,77e,28,51,1,0,0,km,223008,623008,ff,PEB Odometer
+,77e,24,39,0.0009765625,0,2,V,223012,623012,ff,PEB 12V voltage
+,77e,24,39,0.0009765625,0,2,V,22300d,62300d,1ff,PEB onboard voltage
+,77e,24,39,0.0625,0,2,A,22301d,62301d,1ff,PEB powertrain HV current
+,77e,24,39,0.015625,0,2,°C,223035,623035,1ff,PEB rotor temperature
+,77e,31,31,1,0,0,,22300b,62300b,ff,PEB ignition present,0:Ignition is OFF;1:Ignition is ON
+,77e,31,31,1,0,0,,22300c,62300c,ff,PEB ignition present alt,0:Ignition is OFF;1:Ignition is ON
 ,793,0,0,1,0,0,,1081,5081,ff,start diag
 ,793,0,0,1,0,0,,10c0,50c0,ff,start diag
 ,793,0,0,1,0,0,,3e01,7e01,ff,Tester present
