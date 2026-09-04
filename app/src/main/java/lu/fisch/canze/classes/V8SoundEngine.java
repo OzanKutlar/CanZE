@@ -17,11 +17,14 @@
 
 package lu.fisch.canze.classes;
 
+import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.res.AssetManager;
+import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTrack;
+import android.os.Build;
 import android.os.Process;
 import android.util.Log;
 
@@ -128,6 +131,24 @@ public class V8SoundEngine {
     private static final double PCM_HARD_CLAMP = 32000.0;
     private static final int LISTENER_DIVIDER = 8;
 
+    // Output buffer sizing. getMinBufferSize() reports BYTES, so all of this is in bytes.
+    // 512 frames * 2 bytes * 6 buffers = 6144 bytes, roughly 70 ms of headroom. The previous
+    // BUFFER_SIZE * 4 was only ~23 ms and sat right on the edge of underrunning, which is what
+    // made other apps' playback glitch.
+    private static final int BYTES_PER_SAMPLE = 2;
+    private static final int TARGET_BUFFER_COUNT = 6;
+
+    // Shutdown ramp. The fade must finish before the state machine reaches ENGINE_OFF.
+    private static final float STOP_FADE_FRACTION = 0.30f;
+    private static final float MIN_STOPPING_RPM = 60f;
+    private static final int SILENCE_RAMP_SAMPLES = 441; // ~10 ms at 44.1 kHz
+
+    // Render thread parking while the ignition is off.
+    private static final long PARK_POLL_MS = 50L;
+    private static final int PARK_MAX_ITERATIONS = 1200; // bounded: ~60 s per outer pass
+    private static final long FADE_OUT_POLL_MS = 10L;
+    private static final int FADE_OUT_MAX_POLLS = 6;     // bounded: 60 ms grace on stop()
+
     private Thread audioThread;
     private volatile boolean isRunning = false;
     private volatile boolean isMuted = false;
@@ -210,6 +231,12 @@ public class V8SoundEngine {
     private float popEnvelope = 0f;
     private float smoothedMasterVolume = 0f;
 
+    // Last PCM value actually emitted, used to ramp to silence without a discontinuity.
+    // Volatile because stop() polls it from the caller's thread.
+    private volatile float lastPcm = 0f;
+    private int silenceRampPos = 0;
+    private volatile boolean fadeOutRequested = false;
+
     private final Random rng = new Random();
     private EngineListener engineListener;
 
@@ -258,9 +285,11 @@ public class V8SoundEngine {
     public void setIgnition(boolean on) {
         if (on) {
             if (engineState == ENGINE_OFF || engineState == ENGINE_STOPPING) {
+                // Clear the chain BEFORE publishing the new state. A parked render thread wakes
+                // on engineState != ENGINE_OFF, so assigning it last avoids waking into a
+                // half-reset signal chain.
+                resetForStart();
                 engineState = ENGINE_RUNNING;
-                stateTimer = 0f;
-                currentRpm = 0f; // Begin smooth spin-up to 1000 RPM
             }
         } else {
             if (engineState == ENGINE_RUNNING) {
@@ -273,6 +302,30 @@ public class V8SoundEngine {
 
     public int getEngineState() {
         return engineState;
+    }
+
+    /**
+     * Returns the synthesizer to a clean, click-free state. Without this a restart inherits the
+     * previous run's filter memory and smoothed volume, which produces an audible thump.
+     */
+    private void resetForStart() {
+        stateTimer = 0f;
+        currentRpm = 0f; // Begin smooth spin-up to 1000 RPM
+        stopBaseRpm = 0f;
+        smoothedMasterVolume = 0f;
+        popEnvelope = 0f;
+        lastPcm = 0f;
+        silenceRampPos = 0;
+
+        bank1Dc.reset();
+        bank2Dc.reset();
+        bank1Derivative.reset();
+        bank2Derivative.reset();
+        antiAlias.reset();
+        popFilter.reset();
+
+        leveling.reset();
+        leveling.setTarget(levelTarget);
     }
 
     /* ------------------------------------------------------ tuning setters */
@@ -355,14 +408,40 @@ public class V8SoundEngine {
     }
 
     public synchronized void stop() {
+        final Thread thread = audioThread;
+        if (thread == null) {
+            isRunning = false;
+            return;
+        }
+
+        // Ask the render loop to ramp to silence first, so leaving the screen mid-note does not
+        // truncate the waveform at a non-zero sample.
+        fadeOutRequested = true;
+        waitForFadeOut();
+
         isRunning = false;
-        Thread thread = audioThread;
         audioThread = null;
-        if (thread == null) return;
         try {
             thread.join(500);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+        fadeOutRequested = false;
+    }
+
+    /**
+     * Bounded wait for the render thread to reach a zero output sample. Worst case 60 ms.
+     */
+    private void waitForFadeOut() {
+        for (int i = 0; i < FADE_OUT_MAX_POLLS; i++) {
+            if (!isRunning) return;
+            if (lastPcm == 0f) return;
+            try {
+                Thread.sleep(FADE_OUT_POLL_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
         }
     }
 
@@ -408,7 +487,9 @@ public class V8SoundEngine {
 
     private void audioLoop() {
         try {
-            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO);
+            // THREAD_PRIORITY_AUDIO, not URGENT_AUDIO. Urgent is intended for the system's own
+            // mixer threads; a procedural synth running FFTs should not outrank them.
+            Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO);
         } catch (Exception e) {
             Log.w(TAG, "could not raise audio thread priority", e);
         }
@@ -428,17 +509,70 @@ public class V8SoundEngine {
     }
 
     private AudioTrack createTrack() {
-        int minBuf = AudioTrack.getMinBufferSize(
+        final int minBuf = AudioTrack.getMinBufferSize(
                 SAMPLE_RATE,
                 AudioFormat.CHANNEL_OUT_MONO,
                 AudioFormat.ENCODING_PCM_16BIT
         );
         if (minBuf <= 0) return null;
 
-        int bufSize = Math.max(minBuf, BUFFER_SIZE * 4);
-        AudioTrack track;
+        final int desiredBytes = BUFFER_SIZE * BYTES_PER_SAMPLE * TARGET_BUFFER_COUNT;
+        final int bufSize = Math.max(minBuf, desiredBytes);
+
+        AudioTrack track = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            track = createTrackModern(bufSize);
+        }
+        if (track == null) {
+            track = createTrackLegacy(bufSize);
+        }
+        if (track == null) return null;
+
+        if (track.getState() != AudioTrack.STATE_INITIALIZED) {
+            releaseTrack(track);
+            return null;
+        }
+        return track;
+    }
+
+    /**
+     * API 21+ path. Kept in its own method so AudioAttributes is never resolved on older
+     * runtimes, which matters because minSdkVersion is 15.
+     *
+     * USAGE_MEDIA / CONTENT_TYPE_MUSIC is the direct equivalent of the legacy STREAM_MUSIC, so
+     * routing and volume behaviour are unchanged. Low latency mode is deliberately NOT requested:
+     * it asks for a smaller buffer and more HAL pressure, the opposite of what we want here.
+     */
+    @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+    private AudioTrack createTrackModern(int bufSize) {
         try {
-            track = new AudioTrack(
+            final AudioAttributes attributes = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build();
+
+            final AudioFormat format = new AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(SAMPLE_RATE)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build();
+
+            return new AudioTrack(
+                    attributes,
+                    format,
+                    bufSize,
+                    AudioTrack.MODE_STREAM,
+                    AudioManager.AUDIO_SESSION_ID_GENERATE
+            );
+        } catch (Exception e) {
+            Log.w(TAG, "modern AudioTrack unavailable, falling back to legacy", e);
+            return null;
+        }
+    }
+
+    private AudioTrack createTrackLegacy(int bufSize) {
+        try {
+            return new AudioTrack(
                     AudioManager.STREAM_MUSIC,
                     SAMPLE_RATE,
                     AudioFormat.CHANNEL_OUT_MONO,
@@ -447,14 +581,9 @@ public class V8SoundEngine {
                     AudioTrack.MODE_STREAM
             );
         } catch (Exception e) {
+            Log.e(TAG, "could not create AudioTrack", e);
             return null;
         }
-
-        if (track.getState() != AudioTrack.STATE_INITIALIZED) {
-            releaseTrack(track);
-            return null;
-        }
-        return track;
     }
 
     private void releaseTrack(AudioTrack track) {
@@ -465,7 +594,26 @@ public class V8SoundEngine {
 
     private void renderLoop(AudioTrack track) {
         final short[] out = new short[BUFFER_SIZE];
+        boolean playing = true;
+
         while (isRunning) {
+            // With the ignition off there is nothing to synthesise. Previously the loop still ran
+            // the full DSP chain and a blocking write every 11.6 ms just to emit silence, which
+            // starved the system mixer and glitched other apps' playback.
+            if (isSilent()) {
+                if (playing) {
+                    pauseTrack(track);
+                    playing = false;
+                }
+                if (!parkUntilActive()) return;
+                continue;
+            }
+
+            if (!playing) {
+                if (!resumeTrack(track)) return;
+                playing = true;
+            }
+
             updateControl();
             renderExcitation(dryBuffer, directBuffer);
             applyConvolution(dryBuffer, wetBuffer);
@@ -473,6 +621,52 @@ public class V8SoundEngine {
 
             final int written = track.write(out, 0, BUFFER_SIZE);
             if (written < 0) return;
+        }
+    }
+
+    /**
+     * Safe to park only once the engine is off AND the output has actually settled at zero,
+     * so we never park mid-waveform.
+     */
+    private boolean isSilent() {
+        return engineState == ENGINE_OFF && lastPcm == 0f;
+    }
+
+    /**
+     * Bounded poll until the engine restarts or the thread is asked to exit.
+     *
+     * @return true to continue rendering, false to exit the render loop
+     */
+    private boolean parkUntilActive() {
+        for (int i = 0; i < PARK_MAX_ITERATIONS; i++) {
+            if (!isRunning) return false;
+            if (engineState != ENGINE_OFF) return true;
+            try {
+                Thread.sleep(PARK_POLL_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return isRunning;
+    }
+
+    private void pauseTrack(AudioTrack track) {
+        try {
+            track.pause();
+            track.flush();
+        } catch (Exception e) {
+            Log.w(TAG, "could not pause audio track", e);
+        }
+    }
+
+    private boolean resumeTrack(AudioTrack track) {
+        try {
+            track.play();
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "could not resume audio track", e);
+            return false;
         }
     }
 
@@ -500,14 +694,18 @@ public class V8SoundEngine {
         } else if (engineState == ENGINE_STOPPING) {
             // Keep combustion at natural idle strength, gently tapering only in the final 15%
             float progress = Math.min(1.0f, stateTimer / STOP_TIME_S);
-            float tail = (progress > 0.85f) ? (1.0f - progress) / 0.15f : 1.0f;
+            final float tailStart = 1.0f - STOP_FADE_FRACTION;
+            float tail = (progress > tailStart)
+                    ? (1.0f - progress) / STOP_FADE_FRACTION
+                    : 1.0f;
+            if (tail < 0f) tail = 0f;
             combustion = 0.40f * tail;
         }
 
         final float mix = edgeBiteIdle + load * (edgeBiteLoad - edgeBiteIdle);
         final float airNoise = AIR_NOISE_MIN + load * (airNoiseMax - AIR_NOISE_MIN);
         final float subLevel = (engineState == ENGINE_RUNNING) ? (subBassLevel + load * 0.25f) : 0f;
-        final float targetMaster = isMuted ? 0f : masterVolume;
+        final float targetMaster = (isMuted || fadeOutRequested) ? 0f : masterVolume;
 
         final float jitterNow = idleRoughness + load * (JITTER_MAX - idleRoughness);
         bank1Jitter.setScale(jitterNow);
@@ -568,6 +766,11 @@ public class V8SoundEngine {
     }
 
     private void applyConvolution(float[] dry, float[] wet) {
+        // Skip the 4096 tap FFT entirely when there is no excitation to convolve.
+        if (engineState == ENGINE_OFF) {
+            Arrays.fill(wet, 0f);
+            return;
+        }
         if (convolver == null) {
             System.arraycopy(dry, 0, wet, 0, BUFFER_SIZE);
             return;
@@ -588,7 +791,7 @@ public class V8SoundEngine {
 
     private void finishOutput(float[] dry, float[] wet, float[] direct, short[] out) {
         if (engineState == ENGINE_OFF) {
-            Arrays.fill(out, (short) 0);
+            emitSilence(out);
             return;
         }
 
@@ -598,12 +801,9 @@ public class V8SoundEngine {
         // Keep leveling target steady during shutdown so AGC does not collapse volume
         leveling.setTarget(levelTarget * (1f - 0.45f * overrunAmount));
 
-        // Master fade only in the final 15% of stopping for clean zero-crossing
-        float stopMaster = 1.0f;
-        if (engineState == ENGINE_STOPPING && stateTimer > STOP_TIME_S * 0.85f) {
-            stopMaster = Math.max(0f, (STOP_TIME_S - stateTimer) / (STOP_TIME_S * 0.15f));
-        }
+        final float stopMaster = computeStopMaster();
 
+        double pcm = 0.0;
         for (int i = 0; i < BUFFER_SIZE; i++) {
             float exhaust = conv * (wet[i] * 2.2f) + dryAmount * dry[i];
             float v = exhaust + direct[i];
@@ -614,11 +814,55 @@ public class V8SoundEngine {
             double shaped = v * smoothedMasterVolume * INTERNAL_DRIVE * stopMaster;
             shaped = softKnee(shaped);
 
-            double pcm = shaped * PCM_FULL_SCALE;
+            pcm = shaped * PCM_FULL_SCALE;
             if (pcm > PCM_HARD_CLAMP) pcm = PCM_HARD_CLAMP;
             if (pcm < -PCM_HARD_CLAMP) pcm = -PCM_HARD_CLAMP;
 
             out[i] = (short) pcm;
+        }
+
+        lastPcm = (float) pcm;
+        silenceRampPos = 0;
+    }
+
+    /**
+     * Raised cosine fade across the final STOP_FADE_FRACTION of the wind-down. Smooth in the
+     * first derivative at both ends, unlike the previous linear ramp.
+     */
+    private float computeStopMaster() {
+        if (engineState != ENGINE_STOPPING) return 1.0f;
+
+        final float fadeStart = STOP_TIME_S * (1f - STOP_FADE_FRACTION);
+        if (stateTimer <= fadeStart) return 1.0f;
+
+        float remain = (STOP_TIME_S - stateTimer) / (STOP_TIME_S * STOP_FADE_FRACTION);
+        if (remain < 0f) remain = 0f;
+        if (remain > 1f) remain = 1f;
+        return 0.5f * (1f - (float) Math.cos(remain * Math.PI));
+    }
+
+    /**
+     * Ramps the last emitted sample down to zero rather than cutting to silence outright.
+     * This is a backstop guaranteeing no discontinuity on ANY path into ENGINE_OFF, including
+     * an abrupt stop() while the engine is still running.
+     */
+    private void emitSilence(short[] out) {
+        for (int i = 0; i < BUFFER_SIZE; i++) {
+            if (lastPcm == 0f || silenceRampPos >= SILENCE_RAMP_SAMPLES) {
+                out[i] = (short) 0;
+                lastPcm = 0f;
+                continue;
+            }
+
+            final float t = (float) silenceRampPos / (float) SILENCE_RAMP_SAMPLES;
+            final float gain = 0.5f * (1f + (float) Math.cos(t * Math.PI));
+            out[i] = (short) (lastPcm * gain);
+            silenceRampPos++;
+        }
+
+        if (silenceRampPos >= SILENCE_RAMP_SAMPLES) {
+            lastPcm = 0f;
+            silenceRampPos = 0;
         }
     }
 
@@ -674,12 +918,19 @@ public class V8SoundEngine {
         stateTimer += FRAME_DT;
         currentGear = 0;
 
-        float progress = Math.min(1.0f, stateTimer / STOP_TIME_S);
+        final float progress = Math.min(1.0f, stateTimer / STOP_TIME_S);
         // Natural flywheel spin-down curve
-        float decay = (float) Math.pow(1.0f - progress, 1.6);
+        final float decay = (float) Math.pow(1.0f - progress, 1.6);
         currentRpm = stopBaseRpm * decay;
 
-        if (progress >= 1.0f || currentRpm <= 20f) {
+        // Floor the revs so the crank phase keeps advancing through the tail instead of stalling.
+        if (currentRpm < MIN_STOPPING_RPM) currentRpm = MIN_STOPPING_RPM;
+
+        // Terminate on elapsed time ONLY. The old "|| currentRpm <= 20f" condition fired at about
+        // t=2.01s while the amplitude fade did not finish until t=2.2s, so the state flipped to
+        // ENGINE_OFF with the master gain still around 0.57 and the next buffer was hard silence.
+        // That step discontinuity was the audible cut-off.
+        if (progress >= 1.0f) {
             currentRpm = 0f;
             stopBaseRpm = 0f;
             engineState = ENGINE_OFF;

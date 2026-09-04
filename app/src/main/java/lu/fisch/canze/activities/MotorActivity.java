@@ -370,6 +370,9 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     protected void onResume() {
         super.onResume();
         refreshCardVisibilities();
+        // Starting unconditionally is free now: the engine parks its render thread while the
+        // ignition is off, so no DSP runs until the user actually starts it. Keeping the thread
+        // alive here means the first ignition press responds immediately.
         if (soundEngine != null) {
             soundEngine.start();
         }
@@ -482,7 +485,12 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
             pedalField.removeListener(this);
         }
         if (soundEngine != null) {
+            // Detach the listener BEFORE stopping. stop() now allows a short fade-out window,
+            // during which the engine could otherwise still post onEngineStateChanged() into a
+            // destroyed activity via runOnUiThread().
+            soundEngine.setEngineListener(null);
             soundEngine.stop();
+            soundEngine = null;
         }
     }
 
