@@ -178,8 +178,8 @@ public class V8SoundEngine {
     private static final float DF_MIX_MAX = 0.42f;
     private static final float AIR_NOISE_MIN = 0.12f; // depth of noise amplitude modulation
     private static final float AIR_NOISE_MAX = 0.40f;
-    private static final float CONV_MIN = 0.0f;       // convolution wet amount (BYPASSED FOR TEST 1)
-    private static final float CONV_MAX = 0.0f;
+    private static final float CONV_MIN = 0.35f;      // convolution wet amount
+    private static final float CONV_MAX = 0.60f;
     private static final float JITTER_MIN = 0.55f;    // timing irregularity, strongest at idle
     private static final float JITTER_MAX = 0.18f;
 
