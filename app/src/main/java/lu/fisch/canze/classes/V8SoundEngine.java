@@ -673,7 +673,8 @@ public class V8SoundEngine {
         for (int i = 0; i < BUFFER_SIZE; i++) {
             float v = conv * wet[i] + dryAmount * dry[i] + direct[i];
 
-            v = leveling.f(v);
+            // TEST C: Levelling AGC bypassed
+            // v = leveling.f(v);
             v = antiAlias.f(v);
 
             double shaped = v * smoothedMasterVolume * INTERNAL_DRIVE;
