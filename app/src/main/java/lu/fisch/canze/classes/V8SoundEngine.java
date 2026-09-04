@@ -173,15 +173,17 @@ public class V8SoundEngine {
      */
     private static final int HEADER_DELAY = 64; // ~1.45 ms
 
-    // Character controls. Interpolated by load between the idle and full load ends.
-    private static final float DF_MIX_MIN = 0.10f;   // blend toward the pulse derivative
-    private static final float DF_MIX_MAX = 0.42f;
-    private static final float AIR_NOISE_MIN = 0.12f; // depth of noise amplitude modulation
-    private static final float AIR_NOISE_MAX = 0.40f;
-    private static final float CONV_MIN = 0.35f;      // convolution wet amount
-    private static final float CONV_MAX = 0.60f;
-    private static final float JITTER_MIN = 0.55f;    // timing irregularity, strongest at idle
-    private static final float JITTER_MAX = 0.18f;
+    // Character controls. Tuned to authentic engine-sim levels.
+    // In the C++ simulator, derivative mix (dF_F_mix) is a subtle edge enhancer, not a harsh fuzz,
+    // and air noise is a gentle flutter, not an overwhelming broadband roar.
+    private static final float DF_MIX_MIN = 0.04f;   // subtle edge bite at idle
+    private static final float DF_MIX_MAX = 0.14f;   // crisp combustion snap under full load
+    private static final float AIR_NOISE_MIN = 0.03f; // subtle micro-flutter depth
+    private static final float AIR_NOISE_MAX = 0.09f;
+    private static final float CONV_MIN = 0.30f;      // convolution wet amount
+    private static final float CONV_MAX = 0.55f;
+    private static final float JITTER_MIN = 0.40f;    // timing irregularity, strongest at idle
+    private static final float JITTER_MAX = 0.12f;
 
     // Decel pops.
     //
@@ -263,7 +265,6 @@ public class V8SoundEngine {
     private final DerivativeFilter bank2Derivative = new DerivativeFilter();
     private final LowPassFilter bank1AirNoise = new LowPassFilter();
     private final LowPassFilter bank2AirNoise = new LowPassFilter();
-    private final LowPassFilter intakeNoise = new LowPassFilter();
     private final LowPassFilter popFilter = new LowPassFilter();
     private final LowPassFilter antiAlias = new LowPassFilter();
     private final DelayLine collectorDelay = new DelayLine();
@@ -397,12 +398,13 @@ public class V8SoundEngine {
         bank1Dc.initialize(12f, fs);
         bank2Dc.initialize(12f, fs);
 
-        bank1Derivative.setGain(6f);
-        bank2Derivative.setGain(6f);
+        // Derivative gain of 2.2 provides sharp cylinder blowdown edge definition
+        // without generating ultrasonic hash that overloads the saturation knee.
+        bank1Derivative.setGain(2.2f);
+        bank2Derivative.setGain(2.2f);
 
-        bank1AirNoise.setCutoff(1500f, fs);
-        bank2AirNoise.setCutoff(1650f, fs);
-        intakeNoise.setCutoff(420f, fs);
+        bank1AirNoise.setCutoff(1200f, fs);
+        bank2AirNoise.setCutoff(1350f, fs);
 
         // Band limits the pop into a thump. An exhaust bang has its energy in the low mids; a
         // full bandwidth burst reads as a spark or a click rather than as combustion.
@@ -538,11 +540,10 @@ public class V8SoundEngine {
                 ((currentRpm * crankCycleFlutter) / 60.0) * TWO_PI / SAMPLE_RATE;
         final double firingRadPerSample = crankRadPerSample * SUB_BASS_ORDER;
 
-        final float combustion = 0.35f + load * 0.95f;
+        final float combustion = 0.40f + load * 0.90f;
         final float mix = DF_MIX_MIN + load * (DF_MIX_MAX - DF_MIX_MIN);
         final float airNoise = AIR_NOISE_MIN + load * (AIR_NOISE_MAX - AIR_NOISE_MIN);
-        final float intakeLevel = 0.05f + load * 0.20f;
-        final float subLevel = 0.35f + load * 0.25f;
+        final float subLevel = 0.30f + load * 0.25f;
         final float targetMaster = isMuted ? 0f : masterVolume;
 
         // Jitter is strongest at idle: a loping engine is audibly irregular, a loaded one is not.
@@ -590,14 +591,13 @@ public class V8SoundEngine {
             // of a burst of hiss.
             final float pop = popFilter.f(popEnvelope * (2f * rng.nextFloat() - 1f));
 
-            final float intake = intakeNoise.f(2f * rng.nextFloat() - 1f) * intakeLevel;
             final float sub = (float) Math.sin(subBassPhase) * subLevel;
 
-            // Only the exhaust goes through the pipe. The intake is on the other side of the
-            // engine, the sub bass is a felt reinforcement rather than a real acoustic source,
-            // and a decel pop happens at the tailpipe rather than at the ports.
+            // Pure combustion pulses feed the exhaust pipe. Direct layer contains
+            // exclusively the physical sub-bass order and overrun decel pops.
+            // All artificial continuous white noise has been removed.
             dry[i] = piped;
-            direct[i] = pop + intake + sub;
+            direct[i] = pop + sub;
         }
     }
 
@@ -618,12 +618,13 @@ public class V8SoundEngine {
         final float centred = dc.f(jittered);
         final float slope = derivative.f(centred);
 
-        final float blended = centred * (1f - mix) + slope * mix;
-
+        // In the original engine simulator, air-noise modulation is applied ONLY to the
+        // low-frequency base pulse (f * r_mixed), NEVER to the derivative edge (f_p).
+        // Multiplying steep derivative spikes by noise was creating massive sideband hash.
         final float noise = noiseFilter.f(2f * rng.nextFloat() - 1f);
         final float modulator = airNoise * noise + (1f - airNoise);
 
-        return blended * modulator;
+        return slope * mix + (centred * modulator) * (1f - mix);
     }
 
     /**
@@ -671,7 +672,11 @@ public class V8SoundEngine {
         leveling.setTarget(LEVEL_TARGET * (1f - 0.45f * overrunAmount));
 
         for (int i = 0; i < BUFFER_SIZE; i++) {
-            float v = conv * wet[i] + dryAmount * dry[i] + direct[i];
+            // The unit-energy normalized impulse response returns wet samples with ~0.45x
+            // relative peak amplitude. Multiplying wet by 2.2f levels the wet and dry paths
+            // perfectly so the deep exhaust pipe cavity rings out with robust muscle authority.
+            float exhaust = conv * (wet[i] * 2.2f) + dryAmount * dry[i];
+            float v = exhaust + direct[i];
 
             v = leveling.f(v);
             v = antiAlias.f(v);
