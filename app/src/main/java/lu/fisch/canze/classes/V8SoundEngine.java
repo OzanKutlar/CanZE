@@ -521,7 +521,7 @@ public class V8SoundEngine {
         final float combustion = 0.35f + load * 0.95f;
         final float mix = DF_MIX_MIN + load * (DF_MIX_MAX - DF_MIX_MIN);
         final float airNoise = AIR_NOISE_MIN + load * (AIR_NOISE_MAX - AIR_NOISE_MIN);
-        final float intakeLevel = 0.05f + load * 0.20f;
+        final float intakeLevel = 0.0f; // (BYPASSED FOR TEST 3)
         final float subLevel = 0.35f + load * 0.25f;
         final float targetMaster = isMuted ? 0f : masterVolume;
 
