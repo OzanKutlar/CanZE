@@ -119,6 +119,11 @@ public class V8SoundEngine {
     private static final float STATIONARY_SPEED_KMH = 2.5f;
     private static final float STATIONARY_TORQUE_NM = 5f;
 
+    // Torque converter stall-flash launch behavior. At low vehicle speeds under high load,
+    // virtual RPM flares up to the stall speed and descends toward geared RPM as speed builds.
+    private static final float STALL_FLASH_RPM = 1850f;
+    private static final float SLIP_FADE_KMH = 24f;
+
     // Physical flywheel torque integration in neutral (dOmega/dt = T_net / J).
     private static final float NEUTRAL_REV_CEILING_RPM = 5200f;
     private static final float REV_DRIVE_ACCEL_RPM_S = 6800f;
@@ -899,6 +904,11 @@ public class V8SoundEngine {
 
         evaluateShift(wheelRpm, upshiftRpm);
 
+        // Launch converter slip: high-stall flare that decays quadratically with road speed
+        final float slipFade = Math.max(0f, 1f - (currentSpeedKmH / SLIP_FADE_KMH));
+        final float slipCurve = slipFade * slipFade;
+        final float launchSlip = (float) Math.pow(effectiveLoad, 1.25) * STALL_FLASH_RPM * slipCurve;
+
         final float converterSlip = 1.018f + (effectiveLoad * 0.024f);
 
         if (rng.nextFloat() < 0.12f) {
@@ -909,10 +919,12 @@ public class V8SoundEngine {
         final float breathe = (float) (Math.sin(cruiseWanderPhase1) * 14.0
                 + Math.cos(cruiseWanderPhase2) * 8.0);
 
-        float target = (wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 1] * converterSlip)
+        final float gearedRpm = (wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 1] * converterSlip)
                 + downshiftBlip
                 + breathe
                 + rpmWanderSmoothed;
+
+        float target = Math.max(gearedRpm, BASE_IDLE_RPM + launchSlip);
 
         if (target < BASE_IDLE_RPM) target = BASE_IDLE_RPM;
 
