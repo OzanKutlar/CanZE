@@ -311,7 +311,13 @@ public class V8SoundEngine {
             if (engineState == ENGINE_RUNNING) {
                 engineState = ENGINE_STOPPING;
                 stateTimer = 0f;
-                stopBaseRpm = currentRpm;
+                stopBaseRpm = Math.max(idleRpm, currentRpm);
+                overrunAmount = 0f;
+                effectiveLoad = 0f;
+                targetShiftCut = 1.0f;
+                smoothedShiftCut = 1.0f;
+                targetLimiterCut = 1.0f;
+                smoothedLimiterCut = 1.0f;
             }
         }
     }
@@ -722,19 +728,23 @@ public class V8SoundEngine {
             float startGain = Math.min(1.0f, stateTimer / 0.45f);
             combustion = (0.40f + load * 0.90f) * startGain;
         } else if (engineState == ENGINE_STOPPING) {
-            // Keep combustion at natural idle strength, gently tapering only in the final 15%
-            float progress = Math.min(1.0f, stateTimer / STOP_TIME_S);
-            final float tailStart = 1.0f - STOP_FADE_FRACTION;
-            float tail = (progress > tailStart)
-                    ? (1.0f - progress) / STOP_FADE_FRACTION
-                    : 1.0f;
-            if (tail < 0f) tail = 0f;
-            combustion = 0.40f * tail;
+            // As RPM decays, the derivative filter slope naturally falls with frequency.
+            // Keeping combustion pulse drive at 0.70f ensures individual cylinder pumping strokes
+            // remain crisp and audible throughout the wind-down without volume collapse.
+            combustion = 0.70f;
         }
 
         final float mix = edgeBiteIdle + load * (edgeBiteLoad - edgeBiteIdle);
         final float airNoise = AIR_NOISE_MIN + load * (airNoiseMax - AIR_NOISE_MIN);
-        final float subLevel = (engineState == ENGINE_RUNNING) ? (subBassLevel + load * 0.25f) : 0f;
+        final float subLevel;
+        if (engineState == ENGINE_RUNNING) {
+            subLevel = subBassLevel + load * 0.25f;
+        } else if (engineState == ENGINE_STOPPING) {
+            // Retain deep sub-bass rumble during flywheel wind-down rather than abruptly muting it
+            subLevel = subBassLevel * 0.85f;
+        } else {
+            subLevel = 0f;
+        }
         final float targetMaster = (isMuted || fadeOutRequested) ? 0f : masterVolume;
 
         final float jitterNow = idleRoughness + load * (JITTER_MAX - idleRoughness);
@@ -755,8 +765,11 @@ public class V8SoundEngine {
             smoothedLimiterCut += (targetLimiterCut - smoothedLimiterCut) * 0.035f;
             smoothedMasterVolume += (targetMaster - smoothedMasterVolume) * 0.008f;
 
-            final float gate =
-                    smoothedShiftCut * smoothedLimiterCut * (1f - COMBUSTION_OVERRUN_CUT * overrun);
+            // When the engine is winding down, fuel cut / overrun gating does not apply —
+            // the sound is pure mechanical air pumping through the exhaust as the crank slows.
+            final float gate = (engineState == ENGINE_STOPPING)
+                    ? 1.0f
+                    : (smoothedShiftCut * smoothedLimiterCut * (1f - COMBUSTION_OVERRUN_CUT * overrun));
 
             float b1 = (float) CylinderPulse.bankOne(crankPhase) * combustion * gate;
             float b2 = (float) CylinderPulse.bankTwo(crankPhase) * combustion * gate;
@@ -830,7 +843,8 @@ public class V8SoundEngine {
         final float dryAmount = 1f - conv;
 
         // Keep leveling target steady during shutdown so AGC does not collapse volume
-        leveling.setTarget(levelTarget * (1f - 0.45f * overrunAmount));
+        final float levelingMultiplier = (engineState == ENGINE_RUNNING) ? (1f - 0.45f * overrunAmount) : 1.0f;
+        leveling.setTarget(levelTarget * levelingMultiplier);
 
         final float stopMaster = computeStopMaster();
 
