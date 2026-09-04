@@ -270,7 +270,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
             });
         }
 
-        updateIgnitionButton(soundEngine != null && (soundEngine.getEngineState() == V8SoundEngine.ENGINE_RUNNING || soundEngine.getEngineState() == V8SoundEngine.ENGINE_CRANKING));
+        updateIgnitionButton(soundEngine != null && soundEngine.getEngineState() == V8SoundEngine.ENGINE_RUNNING);
         updateSoundButton(soundEngine != null && soundEngine.isMuted());
         updateButtonStyle(btnSettings, "⚙ SETTINGS", 0xFF8A99AD, 0xFF161F2E);
         updateTestDriveButton(0);
