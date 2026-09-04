@@ -174,8 +174,8 @@ public class V8SoundEngine {
     private static final int HEADER_DELAY = 64; // ~1.45 ms
 
     // Character controls. Interpolated by load between the idle and full load ends.
-    private static final float DF_MIX_MIN = 0.0f;    // blend toward the pulse derivative (BYPASSED FOR TEST 4)
-    private static final float DF_MIX_MAX = 0.0f;
+    private static final float DF_MIX_MIN = 0.10f;   // blend toward the pulse derivative
+    private static final float DF_MIX_MAX = 0.42f;
     private static final float AIR_NOISE_MIN = 0.12f; // depth of noise amplitude modulation
     private static final float AIR_NOISE_MAX = 0.40f;
     private static final float CONV_MIN = 0.35f;      // convolution wet amount
