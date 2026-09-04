@@ -94,6 +94,11 @@ public class V8SoundEngine {
     private static final float REV_DRIVE_ACCEL_RPM_S = 6800f;  // Max full-throttle angular acceleration
     private static final float REV_NATURAL_DECEL_RPM_S = 1150f; // Heavy flywheel decel rate (~3.2s from 5000 -> 780 RPM)
 
+    // Rev limiter hysteresis parameters ("bouncing off the rev limiter")
+    private static final float LIMITER_CUT_DROP_RPM = 280f;     // RPM to drop before spark/fuel re-ignites
+    private static final float LIMITER_CUT_DECEL_RPM_S = 4600f; // Rapid deceleration during combustion cut
+    private static final float LIMITER_CUT_MIN_TIME_S = 0.045f; // Minimum cut duration per bounce (~11-13 Hz)
+
     // Minimum road speeds (km/h) required before upshifting into each gear [1->2 .. 5->6]
     private static final float[] MIN_UPSHIFT_SPEEDS = {0f, 28f, 50f, 70f, 88f, 99f};
 
@@ -189,6 +194,10 @@ public class V8SoundEngine {
     private float downshiftBlip = 0f;
     private float targetShiftCut = 1.0f;
     private float smoothedShiftCut = 1.0f;
+    private boolean isLimiterCut = false;
+    private float limiterTimer = 0f;
+    private float targetLimiterCut = 1.0f;
+    private float smoothedLimiterCut = 1.0f;
     private int listenerCounter = 0;
 
     // Organic wander & micro-noise state
@@ -405,6 +414,7 @@ public class V8SoundEngine {
 
             smoothedVolume += (targetVolume - smoothedVolume) * 0.005f;
             smoothedShiftCut += (targetShiftCut - smoothedShiftCut) * 0.008f;
+            smoothedLimiterCut += (targetLimiterCut - smoothedLimiterCut) * 0.035f;
             smoothedMasterVolume += (targetMaster - smoothedMasterVolume) * 0.008f;
 
             // 1. Smooth acoustic blowdown pressure lobes, summed per bank
@@ -454,7 +464,7 @@ public class V8SoundEngine {
             //    every slider position. Applying it after the knee meant the knee output was
             //    already pinned at unity, and anything above 100% then hard clipped into a square
             //    wave (a full stack of odd harmonics, i.e. buzz) instead of saturating.
-            double shaped = warmed * smoothedVolume * smoothedShiftCut
+            double shaped = warmed * smoothedVolume * smoothedShiftCut * smoothedLimiterCut
                     * smoothedMasterVolume * INTERNAL_DRIVE;
             shaped = softKnee(shaped);
 
@@ -621,6 +631,8 @@ public class V8SoundEngine {
 
     private void runIdle() {
         currentGear = 0;
+        isLimiterCut = false;
+        targetLimiterCut = 1.0f;
         float lopeOffset = (float) (Math.sin(lopePhase) * 25.0 + Math.cos(lopePhase * 0.65) * 18.0);
         float targetIdle = BASE_IDLE_RPM + lopeOffset;
         currentRpm += (targetIdle - currentRpm) * 0.14f;
@@ -634,27 +646,40 @@ public class V8SoundEngine {
         float throttle = currentThrottle;
 
         if (throttle > 0.04f) {
-            // Positive Combustion Drive Torque:
-            float throttleEffort = (float) Math.pow(throttle, 1.25);
-            float driveAccel = throttleEffort * REV_DRIVE_ACCEL_RPM_S;
-
-            // Internal mechanical friction grows with speed
-            float internalFriction = (currentRpm / NEUTRAL_REV_CEILING_RPM) * (REV_DRIVE_ACCEL_RPM_S * 0.22f);
-            float netRpmAccel = driveAccel - internalFriction;
-
-            // Soft rev-limiter governor near ceiling
-            if (currentRpm > NEUTRAL_REV_CEILING_RPM - 400f) {
-                float overLimitFactor = (currentRpm - (NEUTRAL_REV_CEILING_RPM - 400f)) / 400f;
-                netRpmAccel *= (1.0f - Math.min(1.0f, overLimitFactor));
+            // Check rev limiter trigger
+            if (currentRpm >= NEUTRAL_REV_CEILING_RPM) {
+                isLimiterCut = true;
+                limiterTimer = 0f;
             }
 
-            currentRpm += netRpmAccel * FRAME_DT;
+            if (isLimiterCut) {
+                limiterTimer += FRAME_DT;
+                // Ignition/fuel cut: torque drops to zero and rapid pumping deceleration pulls RPM down
+                targetLimiterCut = 0.20f; // Staccato exhaust chop
+                currentRpm -= LIMITER_CUT_DECEL_RPM_S * FRAME_DT;
 
-            // Subtle rev-limiter bounce/flutter when pinned at ceiling
-            if (currentRpm >= NEUTRAL_REV_CEILING_RPM) {
-                currentRpm = NEUTRAL_REV_CEILING_RPM - (float) (Math.sin(cruiseWanderPhase1 * 4.0) * 35.0);
+                // Once RPM drops below the hysteresis threshold and minimum cut time elapsed, restore spark
+                if (currentRpm <= NEUTRAL_REV_CEILING_RPM - LIMITER_CUT_DROP_RPM && limiterTimer >= LIMITER_CUT_MIN_TIME_S) {
+                    isLimiterCut = false;
+                    targetLimiterCut = 1.0f;
+                }
+            } else {
+                targetLimiterCut = 1.0f;
+                // Positive Combustion Drive Torque:
+                float throttleEffort = (float) Math.pow(throttle, 1.25);
+                float driveAccel = throttleEffort * REV_DRIVE_ACCEL_RPM_S;
+
+                // Internal mechanical friction grows with speed
+                float internalFriction = (currentRpm / NEUTRAL_REV_CEILING_RPM) * (REV_DRIVE_ACCEL_RPM_S * 0.18f);
+                float netRpmAccel = driveAccel - internalFriction;
+
+                currentRpm += netRpmAccel * FRAME_DT;
             }
         } else {
+            // Throttle released: immediately disable limiter cut and allow natural deceleration
+            isLimiterCut = false;
+            targetLimiterCut = 1.0f;
+
             // Lift-Off: Heavy V8 flywheel inertia and closed-throttle pumping deceleration.
             // As RPM approaches idle (1400 -> 780 RPM), decel rate softly cushions into the lope.
             float idleProximity = Math.max(0.0f, Math.min(1.0f, (currentRpm - BASE_IDLE_RPM) / 650.0f));
@@ -702,9 +727,31 @@ public class V8SoundEngine {
                 + rpmWanderSmoothed;
 
         if (targetDynamicRpm < BASE_IDLE_RPM) targetDynamicRpm = BASE_IDLE_RPM;
-        if (targetDynamicRpm > REDLINE_RPM) targetDynamicRpm = REDLINE_RPM;
 
-        currentRpm += (targetDynamicRpm - currentRpm) * 0.22f;
+        // Rev limiter bounce cycling at redline
+        if (targetDynamicRpm >= REDLINE_RPM || currentRpm >= REDLINE_RPM) {
+            if (currentRpm >= REDLINE_RPM) {
+                isLimiterCut = true;
+                limiterTimer = 0f;
+            }
+
+            if (isLimiterCut) {
+                limiterTimer += FRAME_DT;
+                targetLimiterCut = 0.22f;
+                currentRpm -= LIMITER_CUT_DECEL_RPM_S * FRAME_DT;
+                if (currentRpm <= REDLINE_RPM - LIMITER_CUT_DROP_RPM && limiterTimer >= LIMITER_CUT_MIN_TIME_S) {
+                    isLimiterCut = false;
+                    targetLimiterCut = 1.0f;
+                }
+            } else {
+                targetLimiterCut = 1.0f;
+                currentRpm += (REDLINE_RPM - currentRpm) * 0.35f;
+            }
+        } else {
+            isLimiterCut = false;
+            targetLimiterCut = 1.0f;
+            currentRpm += (targetDynamicRpm - currentRpm) * 0.22f;
+        }
     }
 
     private void evaluateShift(float wheelRpm, float upshiftRpm) {
