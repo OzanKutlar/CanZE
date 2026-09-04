@@ -66,6 +66,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     private RpmGaugeView gaugeRpm;
     private Button btnSoundToggle;
     private Button btnIgnition;
+    private Button btnSettings;
     private Button btnTestDrive;
     private V8SoundEngine soundEngine;
 
@@ -93,8 +94,6 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     private float simDrivePedal = 0f;
     private float simDriveTorque = 0f;
 
-    private SeekBar sbTestThrottle;
-    private TextView tvTestThrottleVal;
     private volatile float testThrottleTarget = SIM_DEFAULT_THROTTLE;
 
     private View cardSimulator;
@@ -134,12 +133,12 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
 
         gaugeRpm = findViewById(R.id.gauge_rpm);
         btnSoundToggle = findViewById(R.id.btn_sound_toggle);
+        btnIgnition = findViewById(R.id.btn_ignition);
+        btnSettings = findViewById(R.id.btn_settings);
         btnTestDrive = findViewById(R.id.btn_test_drive);
 
         initTestDriveButton();
 
-        // V8 Sound Generator. The context lets an impulse response asset at assets/v8_ir.wav
-        // override the synthesised exhaust response; without one the synthesised default is used.
         soundEngine = new V8SoundEngine(this);
         soundEngine.setEngineListener(new V8SoundEngine.EngineListener() {
             @Override
@@ -155,20 +154,10 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
             }
         });
 
-        btnSoundToggle.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                boolean nowMuted = !soundEngine.isMuted();
-                soundEngine.setMuted(nowMuted);
-                updateSoundButton(nowMuted);
-            }
-        });
-
         // Apply saved volume and sound tunings
         lu.fisch.canze.classes.V8SettingsDialog.applySaved(this, soundEngine);
 
-        initAuxControls();
-        initTestThrottleControl();
+        initControlButtons();
         initSimulatorPanel();
         animateEntrance();
     }
@@ -235,137 +224,59 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
         }
     }
 
-    private LinearLayout.LayoutParams makeButtonLayoutParams(boolean isLeft) {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(40), 1.0f);
-        if (isLeft) {
-            lp.rightMargin = dp(4);
-        } else {
-            lp.leftMargin = dp(4);
-        }
-        return lp;
-    }
-
     private void refreshCardVisibilities() {
-        View cardVolume = findViewById(R.id.card_volume);
-        if (cardVolume != null) {
-            cardVolume.setVisibility(View.GONE);
-        }
-
         boolean disconnected = !BluetoothManager.getInstance().isConnected();
-        View cardTestThrottle = findViewById(R.id.card_test_throttle);
-        if (cardTestThrottle != null) {
-            cardTestThrottle.setVisibility(disconnected ? View.VISIBLE : View.GONE);
-        }
-
         if (cardSimulator != null) {
             cardSimulator.setVisibility((disconnected || MainActivity.debugLogMode) ? View.VISIBLE : View.GONE);
         }
     }
 
     /**
-     * Reorganises action controls into a compact, futuristic 2x2 cockpit grid.
+     * Wires listeners and styles for the 2x2 control buttons inside card_tachometer.
      */
-    private void initAuxControls() {
+    private void initControlButtons() {
         refreshCardVisibilities();
 
-        if (btnSoundToggle == null || btnTestDrive == null) return;
-        ViewGroup parent = (ViewGroup) btnSoundToggle.getParent();
-        if (parent == null) return;
-
-        int idx = parent.indexOfChild(btnSoundToggle);
-        if (idx < 0) idx = 0;
-
-        parent.removeView(btnSoundToggle);
-        parent.removeView(btnTestDrive);
-
-        if (parent instanceof LinearLayout) {
-            ((LinearLayout) parent).setOrientation(LinearLayout.VERTICAL);
+        if (btnIgnition != null) {
+            btnIgnition.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (soundEngine == null) return;
+                    int state = soundEngine.getEngineState();
+                    boolean turnOn = (state == V8SoundEngine.ENGINE_OFF || state == V8SoundEngine.ENGINE_STOPPING);
+                    soundEngine.setIgnition(turnOn);
+                    updateIgnitionButton(turnOn);
+                }
+            });
         }
 
-        btnIgnition = new Button(this);
-        btnIgnition.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (soundEngine == null) return;
-                int state = soundEngine.getEngineState();
-                boolean turnOn = (state == V8SoundEngine.ENGINE_OFF || state == V8SoundEngine.ENGINE_STOPPING);
-                soundEngine.setIgnition(turnOn);
-                updateIgnitionButton(turnOn);
-            }
-        });
+        if (btnSoundToggle != null) {
+            btnSoundToggle.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    boolean nowMuted = !soundEngine.isMuted();
+                    soundEngine.setMuted(nowMuted);
+                    updateSoundButton(nowMuted);
+                }
+            });
+        }
 
-        Button btnSettings = new Button(this);
-        btnSettings.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                lu.fisch.canze.classes.V8SettingsDialog.show(MotorActivity.this, soundEngine);
-            }
-        });
+        if (btnSettings != null) {
+            btnSettings.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    lu.fisch.canze.classes.V8SettingsDialog.show(MotorActivity.this, soundEngine);
+                }
+            });
+        }
 
-        // Row 1: [ Ignition ]  [ Sound Toggle ]
-        LinearLayout row1 = new LinearLayout(this);
-        row1.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams row1Lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        row1Lp.topMargin = dp(8);
-        row1Lp.bottomMargin = dp(4);
-        row1.setLayoutParams(row1Lp);
-
-        btnIgnition.setLayoutParams(makeButtonLayoutParams(true));
-        btnSoundToggle.setLayoutParams(makeButtonLayoutParams(false));
-        row1.addView(btnIgnition);
-        row1.addView(btnSoundToggle);
-
-        // Row 2: [ Settings ]  [ Test Drive ]
-        LinearLayout row2 = new LinearLayout(this);
-        row2.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams row2Lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        row2Lp.topMargin = dp(4);
-        row2Lp.bottomMargin = dp(8);
-        row2.setLayoutParams(row2Lp);
-
-        btnSettings.setLayoutParams(makeButtonLayoutParams(true));
-        btnTestDrive.setLayoutParams(makeButtonLayoutParams(false));
-        row2.addView(btnSettings);
-        row2.addView(btnTestDrive);
-
-        // Apply styled visuals
         updateIgnitionButton(soundEngine != null && (soundEngine.getEngineState() == V8SoundEngine.ENGINE_RUNNING || soundEngine.getEngineState() == V8SoundEngine.ENGINE_CRANKING));
         updateSoundButton(soundEngine != null && soundEngine.isMuted());
         updateButtonStyle(btnSettings, "⚙ SETTINGS", 0xFF8A99AD, 0xFF161F2E);
         updateTestDriveButton(0);
-
-        parent.addView(row1, Math.min(idx, parent.getChildCount()));
-        parent.addView(row2, Math.min(idx + 1, parent.getChildCount()));
     }
 
-    /**
-     * Wires the live test throttle slider. Reading it every simulation step is what lets the
-     * pedal be changed mid-test and have torque, acceleration and terminal speed all follow.
-     */
-    private void initTestThrottleControl() {
-        sbTestThrottle = findViewById(R.id.sb_test_throttle);
-        tvTestThrottleVal = findViewById(R.id.tv_test_throttle_val);
-        if (sbTestThrottle == null || tvTestThrottleVal == null) return;
 
-        sbTestThrottle.setProgress((int) SIM_DEFAULT_THROTTLE);
-        tvTestThrottleVal.setText(String.format(Locale.getDefault(), "%.0f %%", SIM_DEFAULT_THROTTLE));
-
-        sbTestThrottle.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                testThrottleTarget = progress;
-                tvTestThrottleVal.setText(String.format(Locale.getDefault(), "%d %%", progress));
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {}
-
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {}
-        });
-    }
 
     /**
      * Advances the test vehicle by one SIM_DT step. Updates simDrivePedal, simDriveTorque and
@@ -519,9 +430,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
                     simDriveSpeed = 0f;
                     simDrivePedal = 0f;
                     simDriveTorque = 0f;
-                    if (sbTestThrottle != null) {
-                        testThrottleTarget = sbTestThrottle.getProgress();
-                    }
+                    testThrottleTarget = SIM_DEFAULT_THROTTLE;
                     updateTestDriveButton(1);
                     testHandler.post(testRunnable);
                 } else if (isTestRunning) {
@@ -578,7 +487,7 @@ public class MotorActivity extends CanzeActivity implements FieldListener {
     }
 
     private void animateEntrance() {
-        int[] cardIds = {R.id.card_volume, R.id.card_test_throttle, R.id.card_tachometer, R.id.card_speed, R.id.card_pedal, R.id.card_torque, R.id.card_simulator};
+        int[] cardIds = {R.id.card_tachometer, R.id.card_speed, R.id.card_pedal, R.id.card_torque, R.id.card_simulator};
         long delay = 50;
         for (int id : cardIds) {
             final android.view.View v = findViewById(id);

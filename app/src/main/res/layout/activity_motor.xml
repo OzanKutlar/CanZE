@@ -19,7 +19,7 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:layout_marginBottom="16dp">
+            android:layout_marginBottom="14dp">
 
             <View
                 android:layout_width="4dp"
@@ -29,148 +29,102 @@
                 android:layout_marginRight="8dp" />
 
             <TextView
-                android:layout_width="0dp"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:text="@string/title_activity_motor"
                 android:textColor="#FFFFFF"
                 android:textSize="20sp"
                 android:textStyle="bold" />
-
-            <Button
-                android:id="@+id/btn_test_drive"
-                android:layout_width="wrap_content"
-                android:layout_height="34dp"
-                android:background="#1E283D"
-                android:text="▶ TEST DRIVE"
-                android:textColor="#FFD600"
-                android:textSize="11sp"
-                android:textStyle="bold"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp"
-                android:layout_marginEnd="8dp"
-                android:layout_marginRight="8dp" />
-
-            <Button
-                android:id="@+id/btn_sound_toggle"
-                android:layout_width="wrap_content"
-                android:layout_height="34dp"
-                android:background="#1E283D"
-                android:text="🔊 V8 SOUND: ON"
-                android:textColor="#00E5FF"
-                android:textSize="11sp"
-                android:textStyle="bold"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp" />
         </LinearLayout>
 
-        <!-- ENGINE SOUND VOLUME CONTROL CARD -->
-        <LinearLayout
-            android:id="@+id/card_volume"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_motor_card"
-            android:orientation="vertical"
-            android:padding="14dp"
-            android:layout_marginBottom="14dp">
-
-            <RelativeLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="6dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_alignParentLeft="true"
-                    android:layout_alignParentStart="true"
-                    android:text="ENGINE EXHAUST VOLUME"
-                    android:textColor="#8A99AD"
-                    android:textSize="11sp"
-                    android:textStyle="bold"
-                    android:letterSpacing="0.08" />
-
-                <TextView
-                    android:id="@+id/tv_volume_val"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_alignParentRight="true"
-                    android:layout_alignParentEnd="true"
-                    android:text="100 %"
-                    android:textColor="#00E5FF"
-                    android:textSize="14sp"
-                    android:textStyle="bold" />
-            </RelativeLayout>
-
-            <SeekBar
-                android:id="@+id/sb_engine_volume"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:max="250"
-                android:progress="100" />
-        </LinearLayout>
-
-        <!-- TEST DRIVE THROTTLE (live while the test runs) -->
-        <LinearLayout
-            android:id="@+id/card_test_throttle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_motor_card"
-            android:orientation="vertical"
-            android:padding="14dp"
-            android:layout_marginBottom="14dp">
-
-            <RelativeLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="6dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_alignParentLeft="true"
-                    android:layout_alignParentStart="true"
-                    android:text="TEST THROTTLE"
-                    android:textColor="#8A99AD"
-                    android:textSize="11sp"
-                    android:textStyle="bold"
-                    android:letterSpacing="0.08" />
-
-                <TextView
-                    android:id="@+id/tv_test_throttle_val"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_alignParentRight="true"
-                    android:layout_alignParentEnd="true"
-                    android:text="20 %"
-                    android:textColor="#FFD600"
-                    android:textSize="14sp"
-                    android:textStyle="bold" />
-            </RelativeLayout>
-
-            <SeekBar
-                android:id="@+id/sb_test_throttle"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:max="100"
-                android:progress="20" />
-        </LinearLayout>
-
-        <!-- V8 TACHOMETER RPM GAUGE CARD -->
+        <!-- V8 COCKPIT & TACHOMETER CLUSTER CARD -->
         <LinearLayout
             android:id="@+id/card_tachometer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:background="@drawable/bg_motor_card"
             android:orientation="vertical"
-            android:padding="16dp"
-            android:gravity="center"
+            android:padding="14dp"
+            android:gravity="center_horizontal"
             android:layout_marginBottom="14dp">
 
             <lu.fisch.canze.widgets.RpmGaugeView
                 android:id="@+id/gauge_rpm"
                 android:layout_width="240dp"
                 android:layout_height="180dp" />
+
+            <!-- 2x2 ACTION CONTROLS DOCK -->
+            <!-- Row 1: [ Ignition ]  [ Sound Toggle ] -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="6dp">
+
+                <Button
+                    android:id="@+id/btn_ignition"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="4dp"
+                    android:layout_marginRight="4dp"
+                    android:text="🔑 IGNITION: OFF"
+                    android:textColor="#8A99AD"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:textAllCaps="false"
+                    android:background="#161F2E" />
+
+                <Button
+                    android:id="@+id/btn_sound_toggle"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginLeft="4dp"
+                    android:text="🔊 SOUND: ON"
+                    android:textColor="#00E5FF"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:textAllCaps="false"
+                    android:background="#161F2E" />
+            </LinearLayout>
+
+            <!-- Row 2: [ Settings ]  [ Test Drive ] -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btn_settings"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="4dp"
+                    android:layout_marginRight="4dp"
+                    android:text="⚙ SETTINGS"
+                    android:textColor="#8A99AD"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:textAllCaps="false"
+                    android:background="#161F2E" />
+
+                <Button
+                    android:id="@+id/btn_test_drive"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginLeft="4dp"
+                    android:text="▶ TEST DRIVE"
+                    android:textColor="#FFD600"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:textAllCaps="false"
+                    android:background="#161F2E" />
+            </LinearLayout>
         </LinearLayout>
 
         <!-- SPEED CARD (HERO) -->
