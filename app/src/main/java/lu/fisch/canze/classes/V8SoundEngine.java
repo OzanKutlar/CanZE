@@ -13,6 +13,8 @@
 
 package lu.fisch.canze.classes;
 
+import android.content.Context;
+import android.content.res.AssetManager;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTrack;
@@ -21,18 +23,45 @@ import android.util.Log;
 
 import java.util.Random;
 
+import lu.fisch.canze.sound.CylinderPulse;
+import lu.fisch.canze.sound.DcBlocker;
+import lu.fisch.canze.sound.DelayLine;
+import lu.fisch.canze.sound.DerivativeFilter;
+import lu.fisch.canze.sound.ImpulseResponseFactory;
+import lu.fisch.canze.sound.JitterFilter;
+import lu.fisch.canze.sound.LevelingFilter;
+import lu.fisch.canze.sound.LowPassFilter;
+import lu.fisch.canze.sound.PartitionedConvolver;
+import lu.fisch.canze.sound.SpeedObserver;
+
 /**
- * Deep-rumble real-time procedural cross-plane V8 engine sound synthesizer.
+ * Real time procedural cross plane V8 for an electric car.
  *
- * Generates low-end acoustic blowdown waves (50 - 250 Hz), crossplane bank offset burble
- * (firing order 1-8-4-3-6-5-7-2), asymmetric header delay lines feeding an X-pipe crossover,
- * muffler cavity acoustics, and a torque-coupled six speed virtual transmission.
+ * Two independent halves.
+ *
+ * The control half is EV specific. In this car the accelerator is not a throttle: the first part
+ * of its travel trims regeneration at speed, and a light press at low speed commands enormous
+ * torque. Pedal position therefore says almost nothing about how hard the drivetrain is working,
+ * and it is ignored entirely while moving. Measured motor torque and road speed drive the sound
+ * instead. The pedal only regains meaning when the car is stationary, where it becomes a rev
+ * command against a virtual flywheel.
+ *
+ * The signal half is a port of the Angeliqe engine simulator synthesiser stage. A full gas
+ * dynamics simulation is not viable on a phone, so the excitation is a synthesised cylinder
+ * pulse train rather than solved cylinder pressure. Everything downstream of that is the real
+ * chain: timing jitter, DC blocking, a derivative blend for the pulse edge, noise modulation,
+ * convolution against an exhaust impulse response, and peak tracking level control.
+ *
+ * The convolution is uniformly partitioned in the frequency domain rather than direct form. The
+ * output is identical; the cost is roughly two orders of magnitude lower, which is what makes
+ * keeping it possible at all.
  *
  * Threading contract:
  *  - setInputs / setMuted / setMasterVolume may be called from any thread (volatile writes).
  *  - start() and stop() are synchronized and expected on the UI thread.
  *  - The AudioTrack is created, owned and released entirely inside the audio thread, so it can
  *    never be released underneath a blocking write().
+ *  - Every buffer and filter is allocated in start(), never in the render loop.
  */
 public class V8SoundEngine {
 
@@ -43,43 +72,46 @@ public class V8SoundEngine {
     }
 
     private static final int SAMPLE_RATE = 44100;
-    private static final int BUFFER_SIZE = 1024;
+
+    /**
+     * Halved from the previous 1024 so the control layer runs at 86 Hz. Motor torque arrives at
+     * roughly 20 Hz and the state machine has to be comfortably faster than its fastest input.
+     */
+    private static final int BUFFER_SIZE = 512;
+
+    /** Convolution block. Must divide BUFFER_SIZE and be a power of two. */
+    private static final int CONV_BLOCK = 256;
+
+    /** About 93 ms of exhaust tail. Halve this first if a device cannot keep up. */
+    private static final int IR_LENGTH = 4096;
+
+    private static final String IR_ASSET = "v8_ir.wav";
 
     /**
      * Audio time represented by one buffer. Fixed by our own BUFFER_SIZE rather than by the
      * platform HAL, so the simulation advances identically on every device no matter how the
      * HAL paces write().
      */
-    private static final float FRAME_DT = (float) BUFFER_SIZE / (float) SAMPLE_RATE; // 23.22 ms
+    private static final float FRAME_DT = (float) BUFFER_SIZE / (float) SAMPLE_RATE; // 11.6 ms
 
     private static final double TWO_PI = 2.0 * Math.PI;
-    private static final double CYCLE_RADIANS = 4.0 * Math.PI; // 720 degrees
+    private static final double CYCLE_RADIANS = CylinderPulse.CYCLE_RADIANS;
 
-    // Cross-plane V8 firing order: 1-8-4-3-6-5-7-2
-    // Bank 1 (Left):  Cyl 1 (0deg),  Cyl 3 (270deg), Cyl 5 (450deg), Cyl 7 (540deg)
-    // Bank 2 (Right): Cyl 8 (90deg), Cyl 4 (180deg), Cyl 6 (360deg), Cyl 2 (630deg)
-    private static final double[] CYLINDER_FIRING_ANGLES = {
-            0.0 * Math.PI / 180.0,   // Cyl 1 (Bank 1)
-            630.0 * Math.PI / 180.0, // Cyl 2 (Bank 2)
-            270.0 * Math.PI / 180.0, // Cyl 3 (Bank 1)
-            180.0 * Math.PI / 180.0, // Cyl 4 (Bank 2)
-            450.0 * Math.PI / 180.0, // Cyl 5 (Bank 1)
-            360.0 * Math.PI / 180.0, // Cyl 6 (Bank 2)
-            540.0 * Math.PI / 180.0, // Cyl 7 (Bank 1)
-            90.0 * Math.PI / 180.0   // Cyl 8 (Bank 2)
-    };
-
-    // Transmission gear ratios (1st to 6th) - tuned for authentic V8 muscle spacing
+    // Virtual transmission. Nothing physical in the car corresponds to this, it exists purely so
+    // the exhaust note sweeps and shifts the way a V8 does instead of tracking one motor rpm all
+    // the way to 8000.
     private static final float[] GEAR_RATIOS = {3.45f, 2.15f, 1.52f, 1.12f, 0.86f, 0.68f};
     private static final float FINAL_DRIVE = 3.65f;
-    private static final float WHEEL_CIRCUMFERENCE_M = 1.95f;
     private static final float BASE_IDLE_RPM = 780f;
     private static final float REDLINE_RPM = 6600f;
 
-    // Simulated EV motor capability, used to normalise measured torque into an engine load.
-    // Constant torque up to the base speed, constant power (T proportional to 1/v) above it.
-    private static final float MOTOR_PEAK_TORQUE_NM = 220f;
-    private static final float MOTOR_BASE_SPEED_KMH = 45f;
+    // Real 5AM motor capability, used to normalise measured torque into an engine load.
+    // Constant torque to the taper point, constant power (T proportional to 1/n) above it.
+    private static final float MOTOR_PEAK_TORQUE_NM = 226f;
+    private static final float MOTOR_TAPER_RPM = 3000f;
+
+    /** Regeneration level treated as full overrun. */
+    private static final float FULL_OVERRUN_NM = 80f;
 
     // The car is only treated as standing still when it is BOTH slow and not being driven.
     // Creep torque with the brake released clears this gate, so the engine picks up as the car
@@ -88,16 +120,14 @@ public class V8SoundEngine {
     private static final float STATIONARY_TORQUE_NM = 5f;
 
     // Physical flywheel torque integration in neutral (dOmega/dt = T_net / J).
-    // Zero load means positive throttle accelerates the heavy crank continuously upward.
-    // On lift-off, large V8 rotational inertia results in a smooth ~3.2s decel with rev-hang.
     private static final float NEUTRAL_REV_CEILING_RPM = 5200f;
-    private static final float REV_DRIVE_ACCEL_RPM_S = 6800f;  // Max full-throttle angular acceleration
-    private static final float REV_NATURAL_DECEL_RPM_S = 1150f; // Heavy flywheel decel rate (~3.2s from 5000 -> 780 RPM)
+    private static final float REV_DRIVE_ACCEL_RPM_S = 6800f;
+    private static final float REV_NATURAL_DECEL_RPM_S = 1150f;
 
-    // Rev limiter hysteresis parameters ("bouncing off the rev limiter")
-    private static final float LIMITER_CUT_DROP_RPM = 280f;     // RPM to drop before spark/fuel re-ignites
-    private static final float LIMITER_CUT_DECEL_RPM_S = 4600f; // Rapid deceleration during combustion cut
-    private static final float LIMITER_CUT_MIN_TIME_S = 0.045f; // Minimum cut duration per bounce (~11-13 Hz)
+    // Rev limiter hysteresis ("bouncing off the limiter")
+    private static final float LIMITER_CUT_DROP_RPM = 280f;
+    private static final float LIMITER_CUT_DECEL_RPM_S = 4600f;
+    private static final float LIMITER_CUT_MIN_TIME_S = 0.045f;
 
     // Minimum road speeds (km/h) required before upshifting into each gear [1->2 .. 5->6]
     private static final float[] MIN_UPSHIFT_SPEEDS = {0f, 28f, 50f, 70f, 88f, 99f};
@@ -105,92 +135,89 @@ public class V8SoundEngine {
     /** Minimum time between two shifts. Closes the 1<->2 hunting window. */
     private static final float SHIFT_LOCKOUT_S = 0.8f;
 
-    // Cruise detection, in real units rather than per-buffer deltas
+    // Cruise detection, in real units
     private static final float CRUISE_ACCEL_THRESHOLD = 1.2f; // km/h per second
     private static final float CRUISE_ENGAGE_S = 1.0f;
     private static final float CRUISE_RELEASE_S = 0.5f;
 
-    // Oscillator rates in radians per second (were per-buffer increments)
+    // Oscillator rates in radians per second
     private static final double LOPE_RATE = 5.17;
     private static final double CRUISE_WANDER_RATE_1 = 3.66; // ~0.58 Hz
     private static final double CRUISE_WANDER_RATE_2 = 7.58; // ~1.21 Hz
-    private static final double PHASE_WRAP = TWO_PI * 100.0; // multiples of 0.65 stay continuous
+    private static final double PHASE_WRAP = TWO_PI * 100.0;
 
     /**
-     * Order of the sub-bass reinforcement oscillator, relative to crank revolutions.
+     * Order of the sub bass reinforcement oscillator, relative to crank revolutions.
      *
      * The physically correct value is 4.0 (a four stroke V8 fires eight times per 720 degrees,
      * so four times per crank revolution). Do NOT "fix" this to 4.0. The oscillator is a pure
      * sine, and at 4.0 it lands exactly on the firing fundamental the pulse train already
      * produces (52 Hz at idle, 200 Hz at 3000 RPM), where a mathematically perfect tone tracking
-     * engine speed reads as unmistakably synthetic. At 2.0 it sits at or below the 22 Hz
-     * high-pass corner and contributes felt weight without ever being audible as a tone.
+     * engine speed reads as unmistakably synthetic. At 2.0 it sits at or below the high pass
+     * corner and contributes felt weight without ever being audible as a tone.
      */
     private static final double SUB_BASS_ORDER = 2.0;
 
-    // Acoustic delay line modelling propagation from the exhaust ports to the collector.
-    //
-    // BOTH BANKS MUST BE READ AT THE SAME OFFSET. It is tempting to stagger them ("the banks
-    // carry different cylinders, so they are different signals") but they are not: both are
-    // sums of the identical PULSE_TABLE waveform differing only in firing phase. Offsetting
-    // them adds that waveform to a delayed copy of itself, which is a feedforward comb with
-    // notches at 44100/(2*offset) Hz and odd multiples. Because those notches do not move with
-    // RPM they stamp a fixed metallic fingerprint over the whole engine. A delay common to both
-    // banks ahead of the summing point is, correctly, inaudible.
-    private static final int DELAY_LEN = 256;
-    private static final int HEADER_DELAY = 64; // ~1.45 ms, identical for both banks
-    private final double[] bank1Delay = new double[DELAY_LEN];
-    private final double[] bank2Delay = new double[DELAY_LEN];
-    private int delayWrite = 0;
+    /**
+     * Acoustic propagation from the exhaust ports to the collector.
+     *
+     * BOTH BANKS ARE DELAYED BY THE SAME AMOUNT, so this is applied once to the collector sum
+     * rather than twice before it. It is tempting to stagger the banks ("they carry different
+     * cylinders, so they are different signals") but they are not: both are sums of the same
+     * lobe shapes differing only in firing phase. Offsetting them adds that waveform to a
+     * delayed copy of itself, which is a feedforward comb with notches at 44100/(2*offset) Hz
+     * and odd multiples. Because those notches do not move with engine speed they stamp a fixed
+     * metallic fingerprint over everything. A delay common to both banks is, correctly,
+     * inaudible on its own, and only exists to place the pulse train correctly against the
+     * convolved tail.
+     */
+    private static final int HEADER_DELAY = 64; // ~1.45 ms
 
-    // Precomputed blowdown pulse shape: sin^2(pi*x) * exp(-0.85x) over 170 degrees of crank.
-    // Evaluating this analytically cost ~353k sin+exp calls per second.
-    private static final int PULSE_TABLE_SIZE = 2048;
-    private static final double PULSE_DURATION_RAD = 170.0 * Math.PI / 180.0;
-    private static final double[] PULSE_TABLE = new double[PULSE_TABLE_SIZE + 1];
+    // Character controls. Interpolated by load between the idle and full load ends.
+    private static final float DF_MIX_MIN = 0.10f;   // blend toward the pulse derivative
+    private static final float DF_MIX_MAX = 0.42f;
+    private static final float AIR_NOISE_MIN = 0.12f; // depth of noise amplitude modulation
+    private static final float AIR_NOISE_MAX = 0.40f;
+    private static final float CONV_MIN = 0.35f;      // convolution wet amount
+    private static final float CONV_MAX = 0.60f;
+    private static final float JITTER_MIN = 0.55f;    // timing irregularity, strongest at idle
+    private static final float JITTER_MAX = 0.18f;
 
-    static {
-        for (int i = 0; i <= PULSE_TABLE_SIZE; i++) {
-            double x = (double) i / (double) PULSE_TABLE_SIZE;
-            double s = Math.sin(x * Math.PI);
-            PULSE_TABLE[i] = s * s * Math.exp(-0.85 * x);
-        }
-    }
+    private static final float POP_DECAY = 0.9992f;
 
-    // Output stage. These three constants are the previous hard coded numbers expressed relative
-    // to full scale (115000 / 31500, 27500 / 31500, 3500 / 31500), so at masterVolume = 1.0 the
-    // rendered waveform is identical to before. The difference is that masterVolume is now applied
-    // AFTER the character forming saturation, which is what makes the slider linear.
+    // Output stage, in normalised full scale units.
     private static final double PCM_FULL_SCALE = 31500.0;
-    private static final double INTERNAL_DRIVE = 3.6508;
+    private static final double INTERNAL_DRIVE = 1.35;
     private static final double SOFT_KNEE = 0.8730;
     private static final double KNEE_WIDTH = 0.1111;
     private static final double PCM_HARD_CLAMP = 32000.0;
 
-    /** Notify the gauge at ~10.8 Hz instead of ~43 Hz. */
-    private static final int LISTENER_DIVIDER = 4;
+    /** Notify the gauge at ~10.8 Hz rather than at the 86 Hz control rate. */
+    private static final int LISTENER_DIVIDER = 8;
 
     private Thread audioThread;
     private volatile boolean isRunning = false;
     private volatile boolean isMuted = false;
     private volatile float masterVolume = 1.0f;
 
+    private AssetManager assetManager = null;
+
     // Telemetry inputs
     private volatile float targetSpeedKmH = 0f;
     private volatile float targetPedalPerc = 0f;
     private volatile float targetTorqueNm = 0f;
 
-    // Dynamic simulation state
+    // Control state
+    private final SpeedObserver observer = new SpeedObserver();
     private float currentRpm = BASE_IDLE_RPM;
     private int currentGear = 1;
     private float currentThrottle = 0f;
     private float currentTorqueNm = 0f;
     private float currentSpeedKmH = 0f;
-    private float prevSpeedKmH = 0f;
-    private float accelKmHPerSec = 0f;
     private float cruiseTimer = 0f; // normalised 0..1
     private float shiftLockout = 0f;
     private float effectiveLoad = 0f;
+    private float overrunAmount = 0f;
     private float downshiftBlip = 0f;
     private float targetShiftCut = 1.0f;
     private float smoothedShiftCut = 1.0f;
@@ -200,7 +227,7 @@ public class V8SoundEngine {
     private float smoothedLimiterCut = 1.0f;
     private int listenerCounter = 0;
 
-    // Organic wander & micro-noise state
+    // Organic wander
     private float pedalWanderTarget = 0f;
     private float pedalWanderSmoothed = 0f;
     private float rpmWanderTarget = 0f;
@@ -214,22 +241,47 @@ public class V8SoundEngine {
     private double lopePhase = 0.0;
     private double subBassPhase = 0.0;
 
-    // Acoustic filter states
-    private double bank1Lp = 0.0;
-    private double bank2Lp = 0.0;
-    private double mufflerLp = 0.0;
-    private double bodyResonator = 0.0;
-    private double hpIn = 0.0;
-    private double hpOut = 0.0;
+    // Signal chain, allocated in start()
+    private final JitterFilter bank1Jitter = new JitterFilter();
+    private final JitterFilter bank2Jitter = new JitterFilter();
+    private final DcBlocker bank1Dc = new DcBlocker();
+    private final DcBlocker bank2Dc = new DcBlocker();
+    private final DerivativeFilter bank1Derivative = new DerivativeFilter();
+    private final DerivativeFilter bank2Derivative = new DerivativeFilter();
+    private final LowPassFilter bank1AirNoise = new LowPassFilter();
+    private final LowPassFilter bank2AirNoise = new LowPassFilter();
+    private final LowPassFilter intakeNoise = new LowPassFilter();
+    private final LowPassFilter antiAlias = new LowPassFilter();
+    private final DelayLine collectorDelay = new DelayLine();
+    private final LevelingFilter leveling = new LevelingFilter();
 
-    // Output smoothing
-    private float smoothedVolume = 0f;
+    private PartitionedConvolver convolver = null;
+    private float[] dryBuffer = null;
+    private float[] wetBuffer = null;
+
+    private float popEnvelope = 0f;
     private float smoothedMasterVolume = 0f;
 
     private final Random rng = new Random();
     private EngineListener engineListener;
 
     public V8SoundEngine() {
+    }
+
+    /**
+     * Preferred constructor. Supplying a context lets an impulse response asset override the
+     * synthesised one; without it the synthesised exhaust is always used.
+     *
+     * @param context any context, only the application context is retained
+     */
+    public V8SoundEngine(Context context) {
+        if (context != null) {
+            this.assetManager = context.getApplicationContext().getAssets();
+        }
+    }
+
+    public void setAssetManager(AssetManager assetManager) {
+        this.assetManager = assetManager;
     }
 
     public void setEngineListener(EngineListener listener) {
@@ -262,9 +314,15 @@ public class V8SoundEngine {
 
     public synchronized void start() {
         if (isRunning) return;
-        isRunning = true;
 
-        smoothedVolume = 0f;
+        try {
+            buildSignalChain();
+        } catch (Exception e) {
+            Log.e(TAG, "could not build signal chain", e);
+            return;
+        }
+
+        isRunning = true;
         smoothedMasterVolume = 0f;
 
         audioThread = new Thread(new Runnable() {
@@ -291,6 +349,46 @@ public class V8SoundEngine {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    /* ------------------------------------------------------------ chain set up */
+
+    /**
+     * Allocates every buffer and filter. Called from start() so the render loop never allocates,
+     * which is what keeps the garbage collector out of the audio path.
+     */
+    private void buildSignalChain() {
+        final float fs = SAMPLE_RATE;
+
+        bank1Jitter.initialize(12, 3.0f, fs);
+        bank2Jitter.initialize(12, 3.7f, fs);
+
+        bank1Dc.initialize(12f, fs);
+        bank2Dc.initialize(12f, fs);
+
+        bank1Derivative.setGain(6f);
+        bank2Derivative.setGain(6f);
+
+        bank1AirNoise.setCutoff(1500f, fs);
+        bank2AirNoise.setCutoff(1650f, fs);
+        intakeNoise.setCutoff(420f, fs);
+        antiAlias.setCutoff(fs * 0.45f, fs);
+
+        collectorDelay.initialize(HEADER_DELAY + 8);
+        collectorDelay.setDelay(HEADER_DELAY);
+
+        leveling.reset();
+        leveling.setTarget(0.70f);
+        leveling.setRange(0.05f, 8.0f);
+
+        final float[] ir = ImpulseResponseFactory.create(assetManager, IR_ASSET, IR_LENGTH, fs);
+        convolver = new PartitionedConvolver(ir, CONV_BLOCK);
+
+        dryBuffer = new float[BUFFER_SIZE];
+        wetBuffer = new float[BUFFER_SIZE];
+
+        observer.reset(targetSpeedKmH);
+        currentSpeedKmH = targetSpeedKmH;
     }
 
     /* ---------------------------------------------------------------- audio */
@@ -364,11 +462,14 @@ public class V8SoundEngine {
     }
 
     private void renderLoop(AudioTrack track) {
-        short[] buffer = new short[BUFFER_SIZE];
+        final short[] out = new short[BUFFER_SIZE];
         while (isRunning) {
-            updateTransmission();
-            renderBuffer(buffer);
-            int written = track.write(buffer, 0, BUFFER_SIZE);
+            updateControl();
+            renderExcitation(dryBuffer);
+            applyConvolution(dryBuffer, wetBuffer);
+            finishOutput(dryBuffer, wetBuffer, out);
+
+            final int written = track.write(out, 0, BUFFER_SIZE);
             if (written < 0) {
                 Log.e(TAG, "AudioTrack.write failed: " + written);
                 return;
@@ -376,103 +477,150 @@ public class V8SoundEngine {
         }
     }
 
-    private void renderBuffer(short[] buffer) {
-        final float rpm = currentRpm;
+    /* ------------------------------------------------------------- synthesis */
+
+    /**
+     * Renders one buffer of dry excitation: the cylinder pulse train through jitter, DC removal,
+     * derivative blending and noise modulation, plus the intake layer and sub bass.
+     */
+    private void renderExcitation(float[] dry) {
         final float load = effectiveLoad;
-        final float torque = currentTorqueNm;
+        final float overrun = overrunAmount;
 
         final double crankRadPerSample =
-                ((rpm * crankCycleFlutter) / 60.0) * TWO_PI / SAMPLE_RATE;
+                ((currentRpm * crankCycleFlutter) / 60.0) * TWO_PI / SAMPLE_RATE;
         final double firingRadPerSample = crankRadPerSample * SUB_BASS_ORDER;
 
-        float targetVolume;
-        if (isMuted) {
-            targetVolume = 0.0f;
-        } else {
-            targetVolume = 0.85f + (load * 0.40f);
-            if (torque < -10f) {
-                // Pronounced engine braking compression sound during regen
-                targetVolume = Math.max(targetVolume, 0.90f);
-            }
-        }
-        final float targetMaster = isMuted ? 0.0f : masterVolume;
+        final float combustion = 0.35f + load * 0.95f;
+        final float mix = DF_MIX_MIN + load * (DF_MIX_MAX - DF_MIX_MIN);
+        final float airNoise = AIR_NOISE_MIN + load * (AIR_NOISE_MAX - AIR_NOISE_MIN);
+        final float intakeLevel = 0.05f + load * 0.20f;
+        final float subLevel = 0.35f + load * 0.25f;
+        final float targetMaster = isMuted ? 0f : masterVolume;
 
-        final double pulseAmplitude = 0.70 + (load * 0.75);
-        final double subBassAmplitude = 0.35 + (load * 0.25);
-        final double drive = 1.35 + (load * 1.65);
+        // Jitter is strongest at idle: a loping engine is audibly irregular, a loaded one is not.
+        bank1Jitter.setScale(JITTER_MIN + load * (JITTER_MAX - JITTER_MIN));
+        bank2Jitter.setScale(JITTER_MIN + load * (JITTER_MAX - JITTER_MIN));
 
         for (int i = 0; i < BUFFER_SIZE; i++) {
             crankPhase += crankRadPerSample;
             if (crankPhase >= CYCLE_RADIANS) {
                 crankPhase -= CYCLE_RADIANS;
-                // Cylinder to cylinder combustion variance: micro-flutter per 720 degree cycle
+                // Cycle to cycle combustion variance
                 crankCycleFlutter = 1.0 + (rng.nextDouble() - 0.5) * 0.007;
             }
 
             subBassPhase += firingRadPerSample;
             if (subBassPhase >= TWO_PI) subBassPhase -= TWO_PI;
 
-            smoothedVolume += (targetVolume - smoothedVolume) * 0.005f;
             smoothedShiftCut += (targetShiftCut - smoothedShiftCut) * 0.008f;
             smoothedLimiterCut += (targetLimiterCut - smoothedLimiterCut) * 0.035f;
             smoothedMasterVolume += (targetMaster - smoothedMasterVolume) * 0.008f;
 
-            // 1. Smooth acoustic blowdown pressure lobes, summed per bank
-            double bank1Raw = pulse(crankPhase, CYLINDER_FIRING_ANGLES[0])
-                    + pulse(crankPhase, CYLINDER_FIRING_ANGLES[2])
-                    + pulse(crankPhase, CYLINDER_FIRING_ANGLES[4])
-                    + pulse(crankPhase, CYLINDER_FIRING_ANGLES[6]);
-            double bank2Raw = pulse(crankPhase, CYLINDER_FIRING_ANGLES[7])
-                    + pulse(crankPhase, CYLINDER_FIRING_ANGLES[3])
-                    + pulse(crankPhase, CYLINDER_FIRING_ANGLES[5])
-                    + pulse(crankPhase, CYLINDER_FIRING_ANGLES[1]);
-            bank1Raw *= pulseAmplitude;
-            bank2Raw *= pulseAmplitude;
+            // Under regeneration combustion largely stops. Collapsing the pulse amplitude while
+            // leaving the pipe resonance intact is what produces overrun rather than silence.
+            final float gate = smoothedShiftCut * smoothedLimiterCut * (1f - 0.75f * overrun);
 
-            // 2. Header tube propagation, different primary length per bank
-            bank1Delay[delayWrite] = bank1Raw;
-            bank2Delay[delayWrite] = bank2Raw;
-            double b1Direct = readDelay(bank1Delay, HEADER_DELAY);
-            double b2Direct = readDelay(bank2Delay, HEADER_DELAY);
-            delayWrite++;
-            if (delayWrite >= DELAY_LEN) delayWrite = 0;
+            float b1 = (float) CylinderPulse.bankOne(crankPhase) * combustion * gate;
+            float b2 = (float) CylinderPulse.bankTwo(crankPhase) * combustion * gate;
 
-            // 3. Exhaust manifold acoustic low-pass (rolls off harsh content above ~950 Hz)
-            bank1Lp += (b1Direct - bank1Lp) * 0.14;
-            bank2Lp += (b2Direct - bank2Lp) * 0.14;
+            b1 = shapeBank(b1, bank1Jitter, bank1Dc, bank1Derivative, bank1AirNoise, mix, airNoise);
+            b2 = shapeBank(b2, bank2Jitter, bank2Dc, bank2Derivative, bank2AirNoise, mix, airNoise);
 
-            // 4. Collector: the banks merge into one pipe. Unity DC gain.
-            double exhaustMix = 0.5 * (bank1Lp + bank2Lp);
+            final float collector = 0.5f * (b1 + b2);
+            final float piped = collectorDelay.f(collector);
 
-            // 5. Muffler cavity resonance
-            bodyResonator += (exhaustMix - bodyResonator) * 0.035;
-            mufflerLp += (exhaustMix - mufflerLp) * 0.09;
-            double deepTone = (exhaustMix * 0.70) + (bodyResonator * 0.60) + (mufflerLp * 0.40);
+            // Decel pops: unburnt mixture igniting in a hot pipe on the overrun.
+            popEnvelope *= POP_DECAY;
+            if (overrun > 0.05f && rng.nextFloat() < overrun * 0.004f) {
+                popEnvelope = overrun * 0.9f;
+            }
+            final float pop = popEnvelope * (2f * rng.nextFloat() - 1f);
 
-            // 6. Sub-bass foundation at the firing order
-            double composite = deepTone + Math.sin(subBassPhase) * subBassAmplitude;
+            final float intake = intakeNoise.f(2f * rng.nextFloat() - 1f) * intakeLevel;
+            final float sub = (float) Math.sin(subBassPhase) * subLevel;
 
-            // 7. Subsonic high-pass (~22 Hz), removes DC without touching audible bass
-            hpOut = 0.9965 * (hpOut + composite - hpIn);
-            hpIn = composite;
+            dry[i] = piped + pop + intake + sub;
+        }
+    }
 
-            // 8. Warm tube style saturation: rich 2nd/3rd harmonics, no high pitched buzz
-            double driven = hpOut * drive;
-            double warmed = driven / (1.0 + Math.abs(driven) * 0.38);
+    /**
+     * One bank of the engine simulator per channel chain.
+     *
+     * @param mix      weight of the derivative against the raw pulse, 0 is all pulse
+     * @param airNoise depth of the noise amplitude modulation, 0 disables it
+     */
+    private float shapeBank(float x,
+                            JitterFilter jitter,
+                            DcBlocker dc,
+                            DerivativeFilter derivative,
+                            LowPassFilter noiseFilter,
+                            float mix,
+                            float airNoise) {
+        final float jittered = jitter.f(x);
+        final float centred = dc.f(jittered);
+        final float slope = derivative.f(centred);
 
-            // 9. Master volume goes BEFORE the knee, so the tanh curve keeps saturating softly at
-            //    every slider position. Applying it after the knee meant the knee output was
-            //    already pinned at unity, and anything above 100% then hard clipped into a square
-            //    wave (a full stack of odd harmonics, i.e. buzz) instead of saturating.
-            double shaped = warmed * smoothedVolume * smoothedShiftCut * smoothedLimiterCut
-                    * smoothedMasterVolume * INTERNAL_DRIVE;
+        final float blended = centred * (1f - mix) + slope * mix;
+
+        final float noise = noiseFilter.f(2f * rng.nextFloat() - 1f);
+        final float modulator = airNoise * noise + (1f - airNoise);
+
+        return blended * modulator;
+    }
+
+    /**
+     * Runs the buffer through the partitioned convolver in whole blocks. Output is time aligned
+     * with the input, so summing the dry path against it introduces no comb filtering.
+     */
+    private void applyConvolution(float[] dry, float[] wet) {
+        if (convolver == null) {
+            System.arraycopy(dry, 0, wet, 0, BUFFER_SIZE);
+            return;
+        }
+        for (int offset = 0; offset + CONV_BLOCK <= BUFFER_SIZE; offset += CONV_BLOCK) {
+            convolveBlock(dry, wet, offset);
+        }
+    }
+
+    private void convolveBlock(float[] dry, float[] wet, int offset) {
+        // The convolver works on block aligned arrays, so hand it a view via the shared scratch.
+        final float[] in = new float[0]; // never used, kept out of the loop below
+        if (in.length != 0) return;
+
+        // Copy in and out around the fixed size call. CONV_BLOCK is small and this stays well
+        // inside budget, while keeping the convolver interface simple and index error free.
+        final float[] blockIn = blockScratchIn;
+        final float[] blockOut = blockScratchOut;
+        System.arraycopy(dry, offset, blockIn, 0, CONV_BLOCK);
+        convolver.process(blockIn, blockOut);
+        System.arraycopy(blockOut, 0, wet, offset, CONV_BLOCK);
+    }
+
+    private final float[] blockScratchIn = new float[CONV_BLOCK];
+    private final float[] blockScratchOut = new float[CONV_BLOCK];
+
+    /**
+     * Wet/dry blend, level control, saturation and conversion to PCM.
+     */
+    private void finishOutput(float[] dry, float[] wet, short[] out) {
+        final float conv = CONV_MIN + effectiveLoad * (CONV_MAX - CONV_MIN);
+        final float dryAmount = 1f - conv;
+
+        for (int i = 0; i < BUFFER_SIZE; i++) {
+            float v = conv * wet[i] + dryAmount * dry[i];
+
+            v = leveling.f(v);
+            v = antiAlias.f(v);
+
+            double shaped = v * smoothedMasterVolume * INTERNAL_DRIVE;
             shaped = softKnee(shaped);
 
-            double out = shaped * PCM_FULL_SCALE;
-            if (out > PCM_HARD_CLAMP) out = PCM_HARD_CLAMP;
-            if (out < -PCM_HARD_CLAMP) out = -PCM_HARD_CLAMP;
+            double pcm = shaped * PCM_FULL_SCALE;
+            if (pcm > PCM_HARD_CLAMP) pcm = PCM_HARD_CLAMP;
+            if (pcm < -PCM_HARD_CLAMP) pcm = -PCM_HARD_CLAMP;
 
-            buffer[i] = (short) out;
+            out[i] = (short) pcm;
         }
     }
 
@@ -488,44 +636,20 @@ public class V8SoundEngine {
         return x;
     }
 
-    /**
-     * Reads a tap from a delay line. Must be called after the current sample has been written at
-     * delayWrite and before delayWrite advances.
-     *
-     * @param samples delay in samples, must be less than DELAY_LEN
-     */
-    private double readDelay(double[] line, int samples) {
-        int idx = delayWrite - samples;
-        if (idx < 0) idx += DELAY_LEN;
-        return line[idx];
-    }
+    /* -------------------------------------------------------------- control */
 
     /**
-     * Table lookup of the blowdown pressure lobe with linear interpolation. The shape has zero
-     * derivative at both boundaries, which is what keeps it free of high pitched buzz.
+     * Advances the control layer by exactly FRAME_DT of audio time, which is fixed by
+     * BUFFER_SIZE and therefore identical on every device.
      */
-    private static double pulse(double crankAngle, double firingAngle) {
-        double delta = crankAngle - firingAngle;
-        if (delta < 0.0) delta += CYCLE_RADIANS;
-        if (delta >= PULSE_DURATION_RAD) return 0.0;
-
-        double pos = (delta / PULSE_DURATION_RAD) * PULSE_TABLE_SIZE;
-        int idx = (int) pos;
-        if (idx < 0) return 0.0;
-        if (idx >= PULSE_TABLE_SIZE) return PULSE_TABLE[PULSE_TABLE_SIZE];
-        double frac = pos - idx;
-        return PULSE_TABLE[idx] + (PULSE_TABLE[idx + 1] - PULSE_TABLE[idx]) * frac;
-    }
-
-    /* -------------------------------------------------------- transmission */
-
-    /**
-     * Virtual transmission and load state machine. Advances by exactly FRAME_DT of audio time
-     * per call, which is fixed by BUFFER_SIZE and therefore identical on every device.
-     */
-    private void updateTransmission() {
+    private void updateControl() {
         applyInputSmoothing();
-        updateAccelerationAndCruise();
+
+        observer.predict(currentTorqueNm, FRAME_DT);
+        observer.correct(targetSpeedKmH, FRAME_DT);
+        currentSpeedKmH = observer.getSpeedKmH();
+
+        updateLoadAndCruise();
         advanceWanderOscillators();
 
         if (!isStationary()) {
@@ -540,49 +664,47 @@ public class V8SoundEngine {
     }
 
     private void applyInputSmoothing() {
-        float rawThrottle = targetPedalPerc / 100.0f;
+        final float rawThrottle = targetPedalPerc / 100.0f;
 
-        // Organic driver foot / throttle plate micro-tremor
+        // Driver foot and linkage micro tremor
         if (rng.nextFloat() < 0.15f) {
             pedalWanderTarget = (rng.nextFloat() - 0.5f) * 0.012f;
         }
         pedalWanderSmoothed += (pedalWanderTarget - pedalWanderSmoothed) * 0.08f;
-        float tremor = (rawThrottle > 0.02f) ? pedalWanderSmoothed : 0.0f;
-        float throttleWithTremor = Math.max(0.0f, Math.min(1.0f, rawThrottle + tremor));
+        final float tremor = (rawThrottle > 0.02f) ? pedalWanderSmoothed : 0.0f;
+        final float throttleWithTremor = Math.max(0.0f, Math.min(1.0f, rawThrottle + tremor));
 
-        // Fast attack, smooth release: react on the very first packet when the pedal goes down,
-        // decay gently on lift off to simulate flywheel inertia.
-        float throttleDelta = throttleWithTremor - currentThrottle;
-        currentThrottle += throttleDelta * (throttleDelta > 0f ? 0.65f : 0.22f);
+        final float throttleDelta = throttleWithTremor - currentThrottle;
+        currentThrottle += throttleDelta * (throttleDelta > 0f ? 0.45f : 0.16f);
 
-        float torqueDelta = targetTorqueNm - currentTorqueNm;
-        currentTorqueNm += torqueDelta * (torqueDelta > 0f ? 0.55f : 0.22f);
+        final float torqueDelta = targetTorqueNm - currentTorqueNm;
+        currentTorqueNm += torqueDelta * (torqueDelta > 0f ? 0.40f : 0.16f);
 
-        // Speed arrives at ~1 Hz as an integer. Fast enough to keep the revs tracking the road
-        // (0.045 was a ~500 ms lag that read as disconnected), slow enough to hide the steps.
-        currentSpeedKmH += (targetSpeedKmH - currentSpeedKmH) * 0.10f;
-
-        downshiftBlip *= 0.84f;
-        targetShiftCut += (1.0f - targetShiftCut) * 0.16f;
+        downshiftBlip *= 0.90f;
+        targetShiftCut += (1.0f - targetShiftCut) * 0.10f;
         if (shiftLockout > 0f) shiftLockout -= FRAME_DT;
     }
 
-    private void updateAccelerationAndCruise() {
-        // km/h per SECOND. This used to be a per-buffer delta compared against 0.12, i.e. an
-        // effective 5.2 km/h/s threshold that the test drive cleared by only about 20%.
-        float rawAccel = (currentSpeedKmH - prevSpeedKmH) / FRAME_DT;
-        prevSpeedKmH = currentSpeedKmH;
-        accelKmHPerSec += (rawAccel - accelKmHPerSec) * 0.02f;
+    /**
+     * Cruise detection now uses the observer's acceleration, which is a real derivative at the
+     * control rate rather than a differentiated one hertz integer.
+     */
+    private void updateLoadAndCruise() {
+        final float accel = observer.getAccelKmHPerSec();
 
-        boolean isCruising = Math.abs(accelKmHPerSec) < CRUISE_ACCEL_THRESHOLD
-                && currentSpeedKmH > 25.0f;
-        if (isCruising) {
+        final boolean cruising = Math.abs(accel) < CRUISE_ACCEL_THRESHOLD && currentSpeedKmH > 25.0f;
+        if (cruising) {
             cruiseTimer = Math.min(1.0f, cruiseTimer + FRAME_DT / CRUISE_ENGAGE_S);
         } else {
             cruiseTimer = Math.max(0.0f, cruiseTimer - FRAME_DT / CRUISE_RELEASE_S);
         }
 
         effectiveLoad = computeLoad() * (1.0f - cruiseTimer * 0.45f);
+
+        float overrun = -currentTorqueNm / FULL_OVERRUN_NM;
+        if (overrun < 0f) overrun = 0f;
+        if (overrun > 1f) overrun = 1f;
+        overrunAmount = overrun;
     }
 
     /**
@@ -596,11 +718,12 @@ public class V8SoundEngine {
     }
 
     /**
-     * @return motor torque available at the current road speed, in Nm
+     * @return motor torque available at the current motor speed, in Nm
      */
     private float availableTorqueNm() {
-        if (currentSpeedKmH <= MOTOR_BASE_SPEED_KMH) return MOTOR_PEAK_TORQUE_NM;
-        return MOTOR_PEAK_TORQUE_NM * MOTOR_BASE_SPEED_KMH / currentSpeedKmH;
+        final float motorRpm = SpeedObserver.motorRpm(currentSpeedKmH);
+        if (motorRpm <= MOTOR_TAPER_RPM) return MOTOR_PEAK_TORQUE_NM;
+        return MOTOR_PEAK_TORQUE_NM * MOTOR_TAPER_RPM / motorRpm;
     }
 
     /**
@@ -612,11 +735,13 @@ public class V8SoundEngine {
      * deliver at this speed. Without that normalisation the same pedal position sounds strained
      * at high speed purely because field weakening has cut the available torque.
      *
-     * Negative torque returns zero, letting the regen and overrun paths take over.
+     * Negative torque returns zero, letting the overrun path take over.
      */
     private float computeLoad() {
         if (isStationary()) return currentThrottle;
-        float load = Math.max(0f, currentTorqueNm) / availableTorqueNm();
+        final float available = availableTorqueNm();
+        if (available <= 0f) return 0f;
+        final float load = Math.max(0f, currentTorqueNm) / available;
         return Math.min(1.0f, load);
     }
 
@@ -633,20 +758,22 @@ public class V8SoundEngine {
         currentGear = 0;
         isLimiterCut = false;
         targetLimiterCut = 1.0f;
-        float lopeOffset = (float) (Math.sin(lopePhase) * 25.0 + Math.cos(lopePhase * 0.65) * 18.0);
-        float targetIdle = BASE_IDLE_RPM + lopeOffset;
-        currentRpm += (targetIdle - currentRpm) * 0.14f;
+
+        final float lope = (float) (Math.sin(lopePhase) * 25.0 + Math.cos(lopePhase * 0.65) * 18.0);
+        final float targetIdle = BASE_IDLE_RPM + lope;
+        currentRpm += (targetIdle - currentRpm) * 0.07f;
     }
 
+    /**
+     * Stationary revving. This is the only place the pedal drives the sound, because it is the
+     * only situation in this car where pedal position and driver intent line up.
+     */
     private void runNeutralRev() {
         currentGear = 0;
 
-        // Physical flywheel integration: In neutral with zero load, pedal represents net drive torque.
-        // Holding any constant pedal continuously accelerates the engine upwards.
-        float throttle = currentThrottle;
+        final float throttle = currentThrottle;
 
         if (throttle > 0.04f) {
-            // Check rev limiter trigger
             if (currentRpm >= NEUTRAL_REV_CEILING_RPM) {
                 isLimiterCut = true;
                 limiterTimer = 0f;
@@ -654,39 +781,35 @@ public class V8SoundEngine {
 
             if (isLimiterCut) {
                 limiterTimer += FRAME_DT;
-                // Ignition/fuel cut: torque drops to zero and rapid pumping deceleration pulls RPM down
-                targetLimiterCut = 0.20f; // Staccato exhaust chop
+                targetLimiterCut = 0.20f;
                 currentRpm -= LIMITER_CUT_DECEL_RPM_S * FRAME_DT;
 
-                // Once RPM drops below the hysteresis threshold and minimum cut time elapsed, restore spark
-                if (currentRpm <= NEUTRAL_REV_CEILING_RPM - LIMITER_CUT_DROP_RPM && limiterTimer >= LIMITER_CUT_MIN_TIME_S) {
+                if (currentRpm <= NEUTRAL_REV_CEILING_RPM - LIMITER_CUT_DROP_RPM
+                        && limiterTimer >= LIMITER_CUT_MIN_TIME_S) {
                     isLimiterCut = false;
                     targetLimiterCut = 1.0f;
                 }
             } else {
                 targetLimiterCut = 1.0f;
-                // Positive Combustion Drive Torque:
-                float throttleEffort = (float) Math.pow(throttle, 1.25);
-                float driveAccel = throttleEffort * REV_DRIVE_ACCEL_RPM_S;
 
-                // Internal mechanical friction grows with speed
-                float internalFriction = (currentRpm / NEUTRAL_REV_CEILING_RPM) * (REV_DRIVE_ACCEL_RPM_S * 0.18f);
-                float netRpmAccel = driveAccel - internalFriction;
+                final float effort = (float) Math.pow(throttle, 1.25);
+                final float driveAccel = effort * REV_DRIVE_ACCEL_RPM_S;
+                final float friction =
+                        (currentRpm / NEUTRAL_REV_CEILING_RPM) * (REV_DRIVE_ACCEL_RPM_S * 0.18f);
 
-                currentRpm += netRpmAccel * FRAME_DT;
+                currentRpm += (driveAccel - friction) * FRAME_DT;
             }
         } else {
-            // Throttle released: immediately disable limiter cut and allow natural deceleration
             isLimiterCut = false;
             targetLimiterCut = 1.0f;
 
-            // Lift-Off: Heavy V8 flywheel inertia and closed-throttle pumping deceleration.
-            // As RPM approaches idle (1400 -> 780 RPM), decel rate softly cushions into the lope.
-            float idleProximity = Math.max(0.0f, Math.min(1.0f, (currentRpm - BASE_IDLE_RPM) / 650.0f));
-            float decelCushion = 0.50f + (idleProximity * 0.50f); // 50% gentler landing near idle
+            final float idleProximity =
+                    Math.max(0.0f, Math.min(1.0f, (currentRpm - BASE_IDLE_RPM) / 650.0f));
+            final float cushion = 0.50f + (idleProximity * 0.50f);
+            final float decel = REV_NATURAL_DECEL_RPM_S
+                    * (1.0f + (currentRpm / NEUTRAL_REV_CEILING_RPM) * 0.4f) * cushion;
 
-            float decelRate = REV_NATURAL_DECEL_RPM_S * (1.0f + (currentRpm / NEUTRAL_REV_CEILING_RPM) * 0.4f) * decelCushion;
-            currentRpm -= decelRate * FRAME_DT;
+            currentRpm -= decel * FRAME_DT;
         }
 
         if (currentRpm < BASE_IDLE_RPM) {
@@ -695,41 +818,37 @@ public class V8SoundEngine {
     }
 
     private void runGearedDrive() {
-        float wheelRpm = (currentSpeedKmH * 1000f) / (WHEEL_CIRCUMFERENCE_M * 60f);
+        final float wheelRpm =
+                (currentSpeedKmH * 1000f) / (SpeedObserver.WHEEL_CIRCUMFERENCE_M * 60f);
         if (currentGear == 0) currentGear = 1;
 
-        // Progressive throttle-delayed upshift schedule:
-        // - Light throttle / steady cruise: shifts around 2,100 - 2,400 RPM
-        // - Moderate throttle (30-50%): holds gear up to 3,400 - 4,400 RPM
-        // - Deep throttle (70-100%): holds gear all the way to 5,800 - 6,200 RPM before shifting
-        float baseUpshift = 2400f - (cruiseTimer * 300f);
-        // Driven by effectiveLoad, which while moving is measured torque rather than pedal, so
-        // gear holding responds to what the car is actually doing.
-        float throttleAggression = (float) Math.pow(effectiveLoad, 1.15);
-        float upshiftRpm = baseUpshift + (throttleAggression * 3900f);
+        // Load delayed upshift schedule. Driven by measured torque rather than pedal, so gear
+        // holding responds to what the car is actually doing.
+        final float baseUpshift = 2400f - (cruiseTimer * 300f);
+        final float aggression = (float) Math.pow(effectiveLoad, 1.15);
+        float upshiftRpm = baseUpshift + (aggression * 3900f);
         if (upshiftRpm > REDLINE_RPM - 400f) upshiftRpm = REDLINE_RPM - 400f;
 
         evaluateShift(wheelRpm, upshiftRpm);
 
-        // Torque converter fluid coupling slips 1.8% to 4.2% with load
-        float converterSlip = 1.018f + (effectiveLoad * 0.024f);
+        final float converterSlip = 1.018f + (effectiveLoad * 0.024f);
 
         if (rng.nextFloat() < 0.12f) {
             rpmWanderTarget = (rng.nextFloat() - 0.5f) * 26.0f;
         }
-        rpmWanderSmoothed += (rpmWanderTarget - rpmWanderSmoothed) * 0.06f;
-        float harmonicBreathe = (float) (Math.sin(cruiseWanderPhase1) * 14.0
+        rpmWanderSmoothed += (rpmWanderTarget - rpmWanderSmoothed) * 0.03f;
+
+        final float breathe = (float) (Math.sin(cruiseWanderPhase1) * 14.0
                 + Math.cos(cruiseWanderPhase2) * 8.0);
 
-        float targetDynamicRpm = (wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 1] * converterSlip)
+        float target = (wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 1] * converterSlip)
                 + downshiftBlip
-                + harmonicBreathe
+                + breathe
                 + rpmWanderSmoothed;
 
-        if (targetDynamicRpm < BASE_IDLE_RPM) targetDynamicRpm = BASE_IDLE_RPM;
+        if (target < BASE_IDLE_RPM) target = BASE_IDLE_RPM;
 
-        // Rev limiter bounce cycling at redline
-        if (targetDynamicRpm >= REDLINE_RPM || currentRpm >= REDLINE_RPM) {
+        if (target >= REDLINE_RPM || currentRpm >= REDLINE_RPM) {
             if (currentRpm >= REDLINE_RPM) {
                 isLimiterCut = true;
                 limiterTimer = 0f;
@@ -739,44 +858,43 @@ public class V8SoundEngine {
                 limiterTimer += FRAME_DT;
                 targetLimiterCut = 0.22f;
                 currentRpm -= LIMITER_CUT_DECEL_RPM_S * FRAME_DT;
-                if (currentRpm <= REDLINE_RPM - LIMITER_CUT_DROP_RPM && limiterTimer >= LIMITER_CUT_MIN_TIME_S) {
+                if (currentRpm <= REDLINE_RPM - LIMITER_CUT_DROP_RPM
+                        && limiterTimer >= LIMITER_CUT_MIN_TIME_S) {
                     isLimiterCut = false;
                     targetLimiterCut = 1.0f;
                 }
             } else {
                 targetLimiterCut = 1.0f;
-                currentRpm += (REDLINE_RPM - currentRpm) * 0.35f;
+                currentRpm += (REDLINE_RPM - currentRpm) * 0.18f;
             }
         } else {
             isLimiterCut = false;
             targetLimiterCut = 1.0f;
-            currentRpm += (targetDynamicRpm - currentRpm) * 0.22f;
+            currentRpm += (target - currentRpm) * 0.12f;
         }
     }
 
     private void evaluateShift(float wheelRpm, float upshiftRpm) {
         if (shiftLockout > 0f) return;
 
-        float rawGearRpm = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 1];
-        float minSpeedForNextGear = (currentGear < 6) ? MIN_UPSHIFT_SPEEDS[currentGear] : Float.MAX_VALUE;
+        final float gearRpm = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 1];
+        final float minSpeedForNext =
+                (currentGear < 6) ? MIN_UPSHIFT_SPEEDS[currentGear] : Float.MAX_VALUE;
 
-        // 1. Progressive Upshift: triggered when engine revs pass the throttle-delayed threshold
-        if (rawGearRpm > upshiftRpm && currentGear < 6 && currentSpeedKmH >= minSpeedForNextGear) {
+        if (gearRpm > upshiftRpm && currentGear < 6 && currentSpeedKmH >= minSpeedForNext) {
             currentGear++;
             targetShiftCut = 0.82f;
             shiftLockout = SHIFT_LOCKOUT_S;
             return;
         }
 
-        // 2. Deceleration Downshift (Anti-Stall only):
-        // In an EV, downshifting for power is eliminated. Downshifts occur STRICTLY when the car
-        // is coasting or regenerating (effectiveLoad near zero, i.e. little or no motor torque)
-        // as engine RPM drops below 1500. Gated on load rather than pedal position, because a
-        // released pedal at speed means regen while a released pedal at rest means creep.
-        float downshiftRpm = 1500f;
-        if (rawGearRpm < downshiftRpm && currentGear > 1 && effectiveLoad < 0.12f) {
-            float rpmAfterDownshift = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 2];
-            if (rpmAfterDownshift < REDLINE_RPM - 1200f) {
+        // Downshifts happen only while coasting or regenerating. In this car there is no power
+        // downshift to model, and gating on load rather than pedal is what distinguishes a
+        // released pedal at speed (regeneration) from a released pedal at rest (creep).
+        final float downshiftRpm = 1500f;
+        if (gearRpm < downshiftRpm && currentGear > 1 && effectiveLoad < 0.12f) {
+            final float after = wheelRpm * FINAL_DRIVE * GEAR_RATIOS[currentGear - 2];
+            if (after < REDLINE_RPM - 1200f) {
                 currentGear--;
                 downshiftBlip = 180f;
                 shiftLockout = SHIFT_LOCKOUT_S;
@@ -785,11 +903,11 @@ public class V8SoundEngine {
     }
 
     /**
-     * Fires at ~10.8 Hz. The gauge cannot show more than that anyway, and posting 43 runnables
-     * per second to the UI looper competes with the OBD callbacks we just moved off it.
+     * Fires at ~10.8 Hz. The gauge cannot show more than that anyway, and posting control rate
+     * runnables to the UI looper competes with the OBD callbacks.
      */
     private void notifyListener() {
-        EngineListener listener = engineListener;
+        final EngineListener listener = engineListener;
         if (listener == null) return;
         listenerCounter++;
         if (listenerCounter < LISTENER_DIVIDER) return;
