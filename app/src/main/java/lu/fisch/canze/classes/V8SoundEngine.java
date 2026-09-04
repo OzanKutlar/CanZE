@@ -60,15 +60,12 @@ public class V8SoundEngine {
     private static final double TWO_PI = 2.0 * Math.PI;
     private static final double CYCLE_RADIANS = CylinderPulse.CYCLE_RADIANS;
 
-    // Ignition state machine.
+    // Ignition state machine
     public static final int ENGINE_OFF = 0;
-    public static final int ENGINE_CRANKING = 1;
-    public static final int ENGINE_RUNNING = 2;
-    public static final int ENGINE_STOPPING = 3;
+    public static final int ENGINE_RUNNING = 1;
+    public static final int ENGINE_STOPPING = 2;
 
-    // Timing parameters for start/stop sequence
-    private static final float CRANK_TIME_S = 0.65f; // Natural crank duration before catch flare
-    private static final float STOP_TIME_S = 2.0f;   // Shutdown flywheel spin-down duration
+    private static final float STOP_TIME_S = 1.8f; // Flywheel spin-down duration
 
     // Virtual manual transmission gear ratios
     private static final float[] GEAR_RATIOS = {3.80f, 2.60f, 1.75f, 1.25f, 0.95f, 0.72f};
@@ -156,11 +153,7 @@ public class V8SoundEngine {
     private volatile int engineState = ENGINE_OFF;
     private float stateTimer = 0f;
     private float stopBaseRpm = 0f;
-
-    // Mechanical start/stop synthesis state
-    private float solenoidSnap = 0f;
     private float clunkImpact = 0f;
-    private float clunkRattle = 0f;
     private boolean clunkFired = false;
 
     // Control state
@@ -264,18 +257,17 @@ public class V8SoundEngine {
     public void setIgnition(boolean on) {
         if (on) {
             if (engineState == ENGINE_OFF || engineState == ENGINE_STOPPING) {
-                engineState = ENGINE_CRANKING;
+                engineState = ENGINE_RUNNING;
                 stateTimer = 0f;
-                solenoidSnap = 1.0f; // Solenoid engage click
                 clunkFired = false;
                 clunkImpact = 0f;
-                clunkRattle = 0f;
+                currentRpm = 0f; // Begin smooth spin-up to 1000 RPM
             }
         } else {
-            if (engineState == ENGINE_CRANKING || engineState == ENGINE_RUNNING) {
+            if (engineState == ENGINE_RUNNING) {
                 engineState = ENGINE_STOPPING;
                 stateTimer = 0f;
-                stopBaseRpm = Math.max(currentRpm, 450f);
+                stopBaseRpm = Math.max(currentRpm, 400f);
                 clunkFired = false;
             }
         }
@@ -489,8 +481,8 @@ public class V8SoundEngine {
     /* ------------------------------------------------------------- synthesis */
 
     private void renderExcitation(float[] dry, float[] direct) {
-        // Complete silence when off and all mechanical ringing has settled
-        if (engineState == ENGINE_OFF && clunkImpact < 0.001f && clunkRattle < 0.001f) {
+        // Complete silence when engine is off and shutdown thump has settled
+        if (engineState == ENGINE_OFF && clunkImpact < 0.001f) {
             Arrays.fill(dry, 0f);
             Arrays.fill(direct, 0f);
             return;
@@ -503,16 +495,11 @@ public class V8SoundEngine {
                 ((currentRpm * crankCycleFlutter) / 60.0) * TWO_PI / SAMPLE_RATE;
         final double firingRadPerSample = crankRadPerSample * SUB_BASS_ORDER;
 
-        // Fuelling combustion curve
+        // Fuelling combustion curve: smoothly ramps in on start, zero during stop
         float combustion = 0f;
         if (engineState == ENGINE_RUNNING) {
-            combustion = 0.40f + load * 0.90f;
-        } else if (engineState == ENGINE_CRANKING) {
-            // Cylinders begin catching naturally past mid-crank
-            if (stateTimer > 0.35f) {
-                float catchProg = Math.min(1.0f, (stateTimer - 0.35f) / 0.30f);
-                combustion = catchProg * 0.55f;
-            }
+            float startGain = Math.min(1.0f, stateTimer / 0.45f);
+            combustion = (0.40f + load * 0.90f) * startGain;
         }
 
         final float mix = edgeBiteIdle + load * (edgeBiteLoad - edgeBiteIdle);
@@ -520,8 +507,7 @@ public class V8SoundEngine {
         final float subLevel = (engineState == ENGINE_RUNNING) ? (subBassLevel + load * 0.25f) : 0f;
         final float targetMaster = isMuted ? 0f : masterVolume;
 
-        final float jitterNow = (engineState == ENGINE_CRANKING) ? 0.80f
-                : idleRoughness + load * (JITTER_MAX - idleRoughness);
+        final float jitterNow = idleRoughness + load * (JITTER_MAX - idleRoughness);
         bank1Jitter.setScale(jitterNow);
         bank2Jitter.setScale(jitterNow);
 
@@ -544,14 +530,6 @@ public class V8SoundEngine {
             float b1 = (float) CylinderPulse.bankOne(crankPhase) * combustion * gate;
             float b2 = (float) CylinderPulse.bankTwo(crankPhase) * combustion * gate;
 
-            // Unpowered compression pumping sound (air passing through cylinders during crank/shutdown)
-            if (currentRpm > 40f && (engineState == ENGINE_STOPPING || (engineState == ENGINE_CRANKING && combustion < 0.2f))) {
-                float pumpingPulse = (float) (Math.pow(Math.max(0, Math.sin(crankPhase * 4.0)), 6.0));
-                float pumpGain = Math.min(1.0f, currentRpm / 350f) * 0.28f;
-                b1 += pumpingPulse * pumpGain;
-                b2 += pumpingPulse * pumpGain * 0.9f;
-            }
-
             b1 = shapeBank(b1, bank1Jitter, bank1Dc, bank1Derivative, bank1AirNoise, mix, airNoise);
             b2 = shapeBank(b2, bank2Jitter, bank2Dc, bank2Derivative, bank2AirNoise, mix, airNoise);
 
@@ -567,40 +545,15 @@ public class V8SoundEngine {
             final float pop = popFilter.f(popEnvelope * (2f * rng.nextFloat() - 1f));
             final float sub = (float) Math.sin(subBassPhase) * subLevel;
 
-            // ------------------ MECHANICAL ACOUSTICS ------------------
-            float mechanical = 0f;
-
-            // 1. Subtle mechanical switch / relay click
-            solenoidSnap *= 0.990f;
-            if (solenoidSnap > 0.001f) {
-                float snapImpulse = (float) Math.sin(i * 0.18) * 0.30f;
-                mechanical += snapImpulse * solenoidSnap * 0.35f;
-            }
-
-            // 2. Heavy mechanical rotation chug as pistons spin through compression
-            if (engineState == ENGINE_CRANKING) {
-                float chugCadence = (float) Math.pow(Math.max(0, Math.sin(crankPhase * 4.0)), 3.0);
-                float rotationRumble = (float) Math.sin(i * 0.035) * 0.15f;
-                mechanical += (chugCadence * 0.26f + rotationRumble * 0.12f);
-            }
-
-            // 3. Shutdown mechanical valve/relay ticks
-            if (engineState == ENGINE_STOPPING && currentRpm > 90f && rng.nextFloat() < 0.0012f) {
-                mechanical += (rng.nextFloat() - 0.5f) * 0.45f;
-            }
-
-            // 4. Terminal flywheel rock-back "CLACK-CLUNK"
-            clunkImpact *= 0.9982f;
-            clunkRattle *= 0.9925f;
-            if (clunkImpact > 0.001f || clunkRattle > 0.001f) {
-                // 120 Hz deep metallic block thump + sharp rocker rattle
-                float thump = (float) Math.sin(i * 0.017) * clunkImpact * 1.35f;
-                float clatter = (rng.nextFloat() - 0.5f) * clunkRattle * 0.95f;
-                mechanical += (thump + clatter);
+            // Clean terminal stop thump (105 Hz round bass thump, ZERO noise / static)
+            clunkImpact *= 0.9965f;
+            float clunk = 0f;
+            if (clunkImpact > 0.002f) {
+                clunk = (float) Math.sin(i * 0.015) * clunkImpact * 0.85f;
             }
 
             dry[i] = piped;
-            direct[i] = pop + sub + mechanical;
+            direct[i] = pop + sub + clunk;
         }
     }
 
@@ -647,13 +600,22 @@ public class V8SoundEngine {
         final float conv = CONV_MIN + effectiveLoad * (exhaustDepth - CONV_MIN);
         final float dryAmount = 1f - conv;
 
-        leveling.setTarget(levelTarget * (1f - 0.45f * overrunAmount));
+        // Stop fade linearly drops the leveling target to 0 during shutdown so the AGC
+        // never amplifies the dying tail into crackling hiss.
+        float stopFade = 1.0f;
+        if (engineState == ENGINE_STOPPING) {
+            stopFade = Math.max(0f, 1.0f - (stateTimer / 1.5f));
+        } else if (engineState == ENGINE_OFF) {
+            stopFade = 0f;
+        }
+
+        leveling.setTarget(levelTarget * (1f - 0.45f * overrunAmount) * stopFade);
 
         for (int i = 0; i < BUFFER_SIZE; i++) {
             float exhaust = conv * (wet[i] * 2.2f) + dryAmount * dry[i];
             float v = exhaust + direct[i];
 
-            v = leveling.f(v);
+            v = leveling.f(v) * stopFade;
             v = antiAlias.f(v);
 
             double shaped = v * smoothedMasterVolume * INTERNAL_DRIVE;
@@ -687,10 +649,6 @@ public class V8SoundEngine {
                 currentGear = 0;
                 notifyListener();
                 return;
-            case ENGINE_CRANKING:
-                runCranking();
-                notifyListener();
-                return;
             case ENGINE_STOPPING:
                 runStopping();
                 notifyListener();
@@ -719,49 +677,23 @@ public class V8SoundEngine {
         notifyListener();
     }
 
-    private void runCranking() {
-        stateTimer += FRAME_DT;
-        currentGear = 0;
-
-        // Flywheel turns over naturally: spins up to ~280 RPM with compression pulses
-        float progress = Math.min(1.0f, stateTimer / CRANK_TIME_S);
-        float targetCrank = 220f + progress * 80f + (float) Math.sin(stateTimer * 24.0) * 25f;
-        currentRpm += (targetCrank - currentRpm) * 0.22f;
-
-        if (stateTimer >= CRANK_TIME_S) {
-            engineState = ENGINE_RUNNING;
-            stateTimer = 0f;
-            // Catch flare: brief rev flare to ~1.30x idle before settling into steady idle
-            currentRpm = idleRpm * 1.30f;
-        }
-    }
-
     private void runStopping() {
         stateTimer += FRAME_DT;
         currentGear = 0;
 
-        // Flywheel momentum winds down exponentially against friction & pumping
-        stopBaseRpm *= (1.0f - 1.75f * FRAME_DT);
+        // Flywheel spin-down against friction
+        stopBaseRpm *= (1.0f - 1.6f * FRAME_DT);
+        currentRpm = stopBaseRpm;
 
-        // Flywheel compression rocking as speed decreases
-        float rocking = 0f;
-        if (stopBaseRpm < 320f && stopBaseRpm > 30f) {
-            float rockFreq = Math.max(3.5f, stopBaseRpm * 0.07f);
-            rocking = (float) Math.sin(stateTimer * rockFreq * TWO_PI) * (320f - stopBaseRpm) * 0.10f;
-        }
-
-        currentRpm = Math.max(0f, stopBaseRpm + rocking);
-
-        // Trigger the terminal compression bounce-back "CLACK-CLUNK"
-        if (!clunkFired && (currentRpm < 60f || stateTimer >= 1.55f)) {
+        // Terminal soft compression halt below 45 RPM
+        if (!clunkFired && (stopBaseRpm < 45f || stateTimer >= 1.4f)) {
             clunkFired = true;
-            clunkImpact = 1.0f;
-            clunkRattle = 0.85f;
+            clunkImpact = 0.8f;
             stopBaseRpm = 0f;
             currentRpm = 0f;
         }
 
-        if (stateTimer >= STOP_TIME_S || (clunkFired && stateTimer > 1.8f)) {
+        if (stateTimer >= STOP_TIME_S || (clunkFired && stateTimer > 1.65f)) {
             currentRpm = 0f;
             stopBaseRpm = 0f;
             engineState = ENGINE_OFF;
@@ -838,14 +770,25 @@ public class V8SoundEngine {
         currentGear = 0;
         isLimiterCut = false;
         targetLimiterCut = 1.0f;
+        stateTimer += FRAME_DT;
 
         final float lope = (float) (Math.sin(lopePhase) * 25.0 + Math.cos(lopePhase * 0.65) * 18.0);
-        final float targetIdle = idleRpm + lope;
-        currentRpm += (targetIdle - currentRpm) * 0.07f;
+
+        // Startup sequence: revs sweep smoothly from 0 -> 1000 RPM and settle on idle
+        if (stateTimer < 1.3f) {
+            float progress = Math.min(1.0f, stateTimer / 1.05f);
+            float startCurve = (float) (1.0 - Math.pow(1.0 - progress, 2.0));
+            float startTarget = startCurve * 1000f;
+            currentRpm += (startTarget - currentRpm) * 0.16f;
+        } else {
+            final float targetIdle = idleRpm + lope;
+            currentRpm += (targetIdle - currentRpm) * 0.07f;
+        }
     }
 
     private void runNeutralRev() {
         currentGear = 0;
+        stateTimer += FRAME_DT;
         final float throttle = currentThrottle;
 
         if (throttle > 0.04f) {
@@ -891,6 +834,7 @@ public class V8SoundEngine {
     }
 
     private void runGearedDrive() {
+        stateTimer += FRAME_DT;
         final float wheelRpm =
                 (currentSpeedKmH * 1000f) / (SpeedObserver.WHEEL_CIRCUMFERENCE_M * 60f);
         if (currentGear == 0) currentGear = 1;
