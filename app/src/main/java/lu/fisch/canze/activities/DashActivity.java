@@ -42,7 +42,11 @@ public class DashActivity extends CanzeActivity implements FieldListener, DebugL
 
     // Diagnostic SIDs from 7EC (EVC)
     private static final String SID_Speed       = "7ec.622003.24";
-    private static final String SID_Soc_24      = "7ec.622002.24";
+    // User SoC, the same field the Battery screen shows. Passive CAN frame 42E,
+    // 13 bits at resolution 0.02 with 2 decimals, so the two-decimal display is
+    // native to the field. Deliberately NOT the EVC PID 622002, whose rows in
+    // _Fields.csv carry conflicting scaling.
+    private static final String SID_UserSoC     = "42e.0";
     private static final String SID_BatTemp     = "7ec.622001.24";
     private static final String SID_Gear        = "7ec.622238.29";
     private static final String SID_AcAuth      = "7ec.62332f.31";
@@ -100,7 +104,7 @@ public class DashActivity extends CanzeActivity implements FieldListener, DebugL
 
         addField(SID_Speed, 1000);
         addField(SID_SpeedPassive, 500);
-        addField(SID_Soc_24, 2000);
+        addField(SID_UserSoC, 3000);
         addField(SID_BatTemp, 3000);
         addField(SID_Gear, 1000);
         addField(SID_AcAuth, 2000);
@@ -138,8 +142,8 @@ public class DashActivity extends CanzeActivity implements FieldListener, DebugL
             return;
         }
 
-        // Battery Percentage (SoC, 2 decimal places)
-        if (sid.equals(SID_Soc_24)) {
+        // Battery Percentage (user SoC, 2 decimal places)
+        if (sid.equals(SID_UserSoC)) {
             TextView tvSoc = findViewById(R.id.textSoc);
             if (tvSoc != null) {
                 tvSoc.setText(String.format(Locale.getDefault(), "%.2f", val));
