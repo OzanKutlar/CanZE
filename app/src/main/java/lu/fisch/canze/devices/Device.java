@@ -57,10 +57,17 @@ public abstract class Device {
     protected static final int TOUGHNESS_SOFT = 2;    // softest reset (i.e atd for ELM)
     protected static final int TOUGHNESS_NONE = 100;  // just clear error status
 
+    /** how long stopAndJoin() waits for the poller before abandoning it */
+    private static final long STOP_JOIN_TIMEOUT_MS = 3000;
+    /** poller nap when there is nothing to do */
+    private static final long IDLE_SLEEP_MS = 1000;
+    /** poller nap when no field is due yet */
+    private static final long NOT_DUE_SLEEP_MS = 200;
+
     private final double minIntervalMultiplicator = 1.3;
     private final double maxIntervalMultiplicator = 2.5;
     double intervalMultiplicator = minIntervalMultiplicator;
-    private boolean deviceIsInitialized = false; // if true initConnection will only start a new pollerthread
+    private volatile boolean deviceIsInitialized = false; // if true initConnection will only start a new pollerthread
 
     /* ----------------------------------------------------------------
      * Attributes
@@ -83,16 +90,11 @@ public abstract class Device {
      */
     private ArrayList<Field> applicationFields = new ArrayList<>();
 
-    /**
-     * The index of the actual field to query.
-     * Loops over ther "fields" array
-     */
-    //protected int fieldIndex = 0;
-
     private int activityFieldIndex = 0;
 
-    private boolean pollerActive = false;
-    Thread pollerThread;
+    private volatile boolean pollerActive = false;
+    volatile Thread pollerThread;
+    private final Object pollerLock = new Object();
 
     /**
      * lastInitProblem should be filled with a descriptive problem description by the initDevice implementation. In normal operation we don't care
@@ -101,92 +103,120 @@ public abstract class Device {
     String lastInitProblem = "";
 
     /* ----------------------------------------------------------------
-     * Abstract methods (to be implemented in each "real" device)
+     * Poller lifecycle
      \ -------------------------------------------------------------- */
 
     /**
      * A device may need some initialisation before data can be requested.
+     * Starts the poller if the link is up, stops it (bounded) if it is not.
      */
     public void initConnection() {
         MainActivity.debug("Device.initConnection: start");
 
-        if (BluetoothManager.getInstance().isConnected()) {
-            MainActivity.debug("Device.initConnection: BT is connected");
-            // make sure we only have one poller task
-            if (pollerThread == null) {
-                MainActivity.debug("Device.initConnection: starting new poller");
-                // post a task to the UI thread
-                setPollerActive(true);
-
-                Runnable r = new Runnable() {
-                    @Override
-                    public void run() {
-                        // if the device has been initialised and we got an answer
-                        // TOUGHNESS_NONE does basically nothing
-                        if (initDevice(deviceIsInitialized ? TOUGHNESS_NONE : TOUGHNESS_HARD)) {
-                            deviceIsInitialized = true;
-                            while (isPollerActive()) {
-                                // MainActivity.debug("Device: inside poller thread");
-                                if (applicationFields.size() + activityFieldsScheduled.size() + activityFieldsAsFastAsPossible.size() == 0
-                                        || !BluetoothManager.getInstance().isConnected()) {
-                                    // MainActivity.debug("Device.poller: no work");
-                                    try {
-                                        if (isPollerActive())
-                                            Thread.sleep(1000);
-                                        else return;
-                                    } catch (Exception e) {
-                                        // ignore a sleep exception
-                                    }
-                                }
-                                // query a field
-                                else {
-                                    if (isPollerActive()) {
-                                        MainActivity.debug("Device.poller: Doing next query");
-                                        queryNextFilter();
-                                    } else return;
-                                }
-                            }
-                            // dereference the poller thread (it i stopped now anyway!)
-                            MainActivity.debug("Device.poller stopped");
-                            pollerThread = null;
-                        } else {
-                            MainActivity.debug("Device.poller: initDevice failed");
-                            deviceIsInitialized = false;
-                            // first check if we have not yet been killed!
-                            if (isPollerActive()) {
-                                MainActivity.debug("Device.poller: restarting Bluetooth");
-                                // drop the BT connexion and try again
-                                (new Thread(new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        // stop the BT but don't reset the device registered fields
-                                        MainActivity.getInstance().stopBluetooth(false);
-                                        // reload the BT with filter registration
-                                        MainActivity.getInstance().reloadBluetooth(false);
-                                        //BluetoothManager.getInstance().connect();
-                                        pollerThread = null; // but we are still quitting the poller thread
-                                    }
-                                })).start();
-                            }
-                        }
-                    }
-                };
-                pollerThread = new Thread(r);
-                // start the thread
-                pollerThread.start();
-            } // never mind, the BT is active, and the poller thread is running. Nothing to do
-        } else {
+        if (!BluetoothManager.getInstance().isConnected()) {
             MainActivity.debug("Device.initConnection: BT is not connected");
-            if (pollerThread != null && pollerThread.isAlive()) {
-                MainActivity.debug("Device.initConnection: stopping poller");
-                setPollerActive(false);
-                try {
-                    pollerThread.join();
-                } catch (Exception e) {
-                    e.printStackTrace();
+            stopAndJoin();
+            return;
+        }
+
+        MainActivity.debug("Device.initConnection: BT is connected");
+        synchronized (pollerLock) {
+            Thread current = pollerThread;
+            if (current != null && current.isAlive() && isPollerActive()) {
+                // never mind, the BT is active, and the poller thread is running. Nothing to do
+                return;
+            }
+            MainActivity.debug("Device.initConnection: starting new poller");
+            setPollerActive(true);
+            Thread poller = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    runPoller();
                 }
+            }, "CanZE-poller");
+            pollerThread = poller;
+            poller.start();
+        }
+    }
+
+    private void runPoller() {
+        final Thread self = Thread.currentThread();
+        try {
+            // TOUGHNESS_NONE does basically nothing
+            boolean ready = initDevice(deviceIsInitialized ? TOUGHNESS_NONE : TOUGHNESS_HARD);
+            if (!ready) {
+                handleInitFailure(self);
+                return;
+            }
+            deviceIsInitialized = true;
+            if (isCurrentPoller(self)) BluetoothManager.getInstance().publishReady();
+
+            pollLoop(self);
+            MainActivity.debug("Device.poller stopped");
+        } catch (RuntimeException e) {
+            MainActivity.debug("Device.poller: unexpected error, poller ends: " + e);
+        } finally {
+            clearPollerReference(self);
+        }
+    }
+
+    /**
+     * Service loop. Ends as soon as a stop is requested, this thread is interrupted, or a
+     * newer poller has replaced this one.
+     */
+    private void pollLoop(Thread self) {
+        while (isCurrentPoller(self)) {
+            if (!hasWork() || !BluetoothManager.getInstance().isConnected()) {
+                if (!sleepPoller(IDLE_SLEEP_MS)) return;
+            } else {
+                MainActivity.debug("Device.poller: Doing next query");
+                queryNextFilter();
             }
         }
+    }
+
+    private void handleInitFailure(Thread self) {
+        MainActivity.debug("Device.poller: initDevice failed");
+        deviceIsInitialized = false;
+        // first check if we have not yet been killed!
+        if (!isCurrentPoller(self)) {
+            MainActivity.debug("Device.poller: stop was requested, not restarting Bluetooth");
+            return;
+        }
+        setPollerActive(false);
+        MainActivity.debug("Device.poller: restarting Bluetooth");
+        BluetoothManager.getInstance().publishConnecting();
+        // drop the BT connexion and try again, serialized with every other stop/reload
+        MainActivity.restartBluetoothAsync();
+    }
+
+    private boolean isCurrentPoller(Thread thread) {
+        return isPollerActive() && pollerThread == thread && !thread.isInterrupted();
+    }
+
+    private boolean hasWork() {
+        return applicationFields.size() + activityFieldsScheduled.size() + activityFieldsAsFastAsPossible.size() > 0;
+    }
+
+    /** @return false if the sleep was interrupted, i.e. the poller should stop */
+    private boolean sleepPoller(long millis) {
+        try {
+            Thread.sleep(millis);
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    private static void dropDebug(String msg) {
+        MainActivity main = MainActivity.getInstance();
+        if (main != null) main.dropDebugMessage(msg);
+    }
+
+    private static void appendDebug(String msg) {
+        MainActivity main = MainActivity.getInstance();
+        if (main != null) main.appendDebugMessage(msg);
     }
 
 
@@ -245,80 +275,77 @@ public abstract class Device {
 
     // query the device for the next filter
     private void queryNextFilter() {
-        if (applicationFields.size() + activityFieldsScheduled.size() + activityFieldsAsFastAsPossible.size() > 0) {
-            try {
+        if (!hasWork()) return;
+        try {
+            Field field = getNextField();
 
-                Field field = getNextField();
-
-                if (field == null) {
-                    // MainActivity.debug("Device: got no next field --> sleeping");
-                    // no next field ---> sleep
-                    try {
-                        Thread.sleep(200);
-                    } catch (Exception e) {
-                        // ignore a sleep exception
-                    }
-                } else {
-                    // long start = Calendar.getInstance().getTimeInMillis();
-                    // MainActivity.debug("Device: queryNextFilter: " + field.getSID());
-                    MainActivity.getInstance().dropDebugMessage(field.getSID());
-
-                    final Frame frame = field.getFrame();
-
-                    // get the data
-                    Message message = requestFrame(frame);
-
-                    // test if we got something
-                    if (!message.isError()) {
-                        MainActivity.getInstance().appendDebugMessage("ok");
-                        frame.registerSuccess();
-                        provenFrames.add(frame.getId());
-                        // trigger the compete event of the message. It will update all fields linked to it's corresponding frame
-                        message.onMessageCompleteEvent();
-                        if (field.getInterval() == INTERVAL_ONCE) {
-                            removeActivityField(field);
-                        }
-                    } else {
-                        // one plain retry
-                        MainActivity.getInstance().appendDebugMessage("...");
-                        message = requestFrame(frame);
-                        if (!message.isError()) {
-                            MainActivity.getInstance().appendDebugMessage("ok");
-                            frame.registerSuccess();
-                            provenFrames.add(frame.getId());
-                            message.onMessageCompleteEvent();
-                            if (field.getInterval() == INTERVAL_ONCE) {
-                                removeActivityField(field);
-                            }
-                        } else {
-                            MainActivity.getInstance().appendDebugMessage("fail");
-                            // failed after single retry. Mark underlying fields as updated to avoid
-                            // queue clogging. The frame will have to get back to the end of the queue
-                            message.onMessageIncompleteEvent();
-
-                            if (message.countsAsDeadPid() && blacklistIfDead(frame)) {
-                                // The dongle and the bus are demonstrably fine, this PID simply
-                                // does not answer on this car. Skipping the re-initialisation
-                                // here is the whole point: it is what was starving the values
-                                // that do work.
-                                return;
-                            }
-
-                            // reset if something went wrong ...
-                            // ... but only if we are not asked to stop!
-                            if (BluetoothManager.getInstance().isConnected()) {
-                                MainActivity.debug("Device.queryNextFilter: Re-initializing");
-                                deviceIsInitialized = false; // force a true device init
-                                initDevice(TOUGHNESS_MEDIUM, 2); // toughness = 1, retries = 2
-                            }
-                        }
-                    }
-                }
+            if (field == null) {
+                // no next field ---> sleep
+                sleepPoller(NOT_DUE_SLEEP_MS);
+                return;
             }
-            // if any error occures, reset the fieldIndex
-            catch (Exception e) {
-                e.printStackTrace();
+
+            dropDebug(field.getSID());
+
+            final Frame frame = field.getFrame();
+
+            // get the data
+            Message message = requestFrame(frame);
+
+            // test if we got something
+            if (!message.isError()) {
+                appendDebug("ok");
+                handleFrameSuccess(field, frame, message);
+                return;
             }
+
+            // one plain retry, unless we are being asked to stop
+            if (!isCurrentPoller(Thread.currentThread())) {
+                message.onMessageIncompleteEvent();
+                return;
+            }
+            appendDebug("...");
+            message = requestFrame(frame);
+            if (!message.isError()) {
+                appendDebug("ok");
+                handleFrameSuccess(field, frame, message);
+                return;
+            }
+
+            appendDebug("fail");
+            // failed after single retry. Mark underlying fields as updated to avoid
+            // queue clogging. The frame will have to get back to the end of the queue
+            message.onMessageIncompleteEvent();
+
+            if (message.countsAsDeadPid() && blacklistIfDead(frame)) {
+                // The dongle and the bus are demonstrably fine, this PID simply
+                // does not answer on this car. Skipping the re-initialisation
+                // here is the whole point: it is what was starving the values
+                // that do work.
+                return;
+            }
+
+            // reset if something went wrong ...
+            // ... but only if we are not asked to stop!
+            if (isCurrentPoller(Thread.currentThread()) && BluetoothManager.getInstance().isConnected()) {
+                MainActivity.debug("Device.queryNextFilter: Re-initializing");
+                deviceIsInitialized = false; // force a true device init
+                deviceIsInitialized = initDevice(TOUGHNESS_MEDIUM, 2); // toughness = 1, retries = 2
+            }
+        }
+        // if any error occures, reset the fieldIndex
+        catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void handleFrameSuccess(Field field, Frame frame, Message message) {
+        frame.registerSuccess();
+        provenFrames.add(frame.getId());
+        // trigger the compete event of the message. It will update all fields linked to it's corresponding frame
+        message.onMessageCompleteEvent();
+        if (field.getInterval() == INTERVAL_ONCE) {
+            removeActivityField(field);
         }
     }
 
@@ -436,8 +463,9 @@ public abstract class Device {
     }
 
     public void join() throws InterruptedException {
-        if (pollerThread != null)
-            pollerThread.join();
+        Thread poller = pollerThread;
+        if (poller != null)
+            poller.join();
     }
 
 
@@ -618,8 +646,6 @@ public abstract class Device {
         synchronized (fields) {
             // only remove from the custom fields
             if (activityFieldsScheduled.remove(field)) {
-                //field.setInterval(Integer.MAX_VALUE);
-                //return; /*
                 // remove it from the database if it is not on the other list
                 if (!containsApplicationField(field) && !containsActivityFieldAsFastAsPossible(field)) {
                     fields.remove(field);
@@ -674,10 +700,7 @@ public abstract class Device {
 
         // remove depenand fields
         // ATTENTION; remove the field, despite if it is used by some other VF or not!
-        //if(field.isVirtual())
-        //{
         // may break something, so please do it manually if really needed!
-        //}
     }
 
     /* ----------------------------------------------------------------
@@ -685,7 +708,14 @@ public abstract class Device {
      \ -------------------------------------------------------------- */
 
 
+    /**
+     * Called for every freshly established Bluetooth link.
+     */
     public void init(boolean reset) {
+        // A new link means the dongle may still be doing whatever it was doing when the
+        // previous link dropped (e.g. streaming ATMA data). Never trust the old init.
+        deviceIsInitialized = false;
+
         // init the connection
         initConnection();
 
@@ -698,25 +728,51 @@ public abstract class Device {
     }
 
     /**
-     * Stop the poller thread and wait for it to be finished
+     * Stop the poller thread and wait (bounded) for it to be finished.
+     * Interrupts the poller so blocking waits inside the device end quickly.
      */
     public void stopAndJoin() {
         MainActivity.debug("Device.stopAndJoin: start");
-        setPollerActive(false);
-        try {
-            if (pollerThread != null && pollerThread.isAlive()) {
-                MainActivity.debug("Device.stopAndJoin: poller informed. Joining thread");
-                if (pollerThread != null)
-                    pollerThread.join();
-                pollerThread = null;
-            } else MainActivity.debug("Device.stopAndJoin: pollerThread is null");
-        } catch (Exception e) {
-            e.printStackTrace();
+        final Thread poller;
+        synchronized (pollerLock) {
+            setPollerActive(false);
+            poller = pollerThread;
         }
+
+        if (poller == null || !poller.isAlive()) {
+            MainActivity.debug("Device.stopAndJoin: pollerThread is null");
+            clearPollerReference(poller);
+            return;
+        }
+        if (poller == Thread.currentThread()) {
+            // joining ourselves would dead-lock; the loop ends on its own now
+            MainActivity.debug("Device.stopAndJoin: called from the poller itself, not joining");
+            return;
+        }
+
+        MainActivity.debug("Device.stopAndJoin: poller informed. Joining thread");
+        poller.interrupt();
+        try {
+            poller.join(STOP_JOIN_TIMEOUT_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            MainActivity.debug("Device.stopAndJoin: interrupted while waiting for the poller");
+        }
+        if (poller.isAlive()) {
+            // it is no longer the registered poller, so it exits at its next loop check
+            MainActivity.debug("Device.stopAndJoin: poller did not stop within " + STOP_JOIN_TIMEOUT_MS + " ms, abandoning it");
+        }
+        clearPollerReference(poller);
         MainActivity.debug("Device.stopAndJoin: poller stopped");
     }
 
-    private boolean isPollerActive() {
+    private void clearPollerReference(Thread poller) {
+        synchronized (pollerLock) {
+            if (poller != null && pollerThread == poller) pollerThread = null;
+        }
+    }
+
+    boolean isPollerActive() {
         return pollerActive;
     }
 

@@ -64,10 +64,19 @@ public class ELM327 extends Device {
     protected boolean initDevice(int toughness, int retries) {
         if (initDevice(toughness)) return true;
         while (retries-- > 0) {
+            if (isStopRequested()) {
+                MainActivity.debug("ELM327: initDevice retries abandoned, a stop was requested");
+                return false;
+            }
             MainActivity.debug("ELM327: flushWithTimeout");
             flushWithTimeout(500);
             MainActivity.debug("ELM327: initDevice(" + toughness + "), " + retries + " retries left");
             if (initDevice(toughness)) return true;
+        }
+        // nobody wants this connection any more (pause, back to the menu, ...): do not resurrect it
+        if (isStopRequested()) {
+            MainActivity.debug("ELM327: initDevice failed while stopping, not restarting Bluetooth");
+            return false;
         }
         MainActivity.toast(MainActivity.TOAST_ELM, "Hard reset failed, restarting Bluetooth ...");
         MainActivity.debug("ELM327: Hard reset failed, restarting Bluetooth ...");
@@ -80,18 +89,12 @@ public class ELM327 extends Device {
         // DO NOT JOIN IT!
         setPollerActive(false);
 
-        (new Thread(new Runnable() {
-            @Override
-            public void run() {
-                // -- give up and restart BT
-                // stop BT without resetting the registered fields
-                MainActivity.debug("ELM327: stopBluetooth (via MainActivity)");
-                MainActivity.getInstance().stopBluetooth(false);
-                // restart BT without reloading all settings
-                MainActivity.debug("ELM327: reloadBluetooth (via MainActivity)");
-                MainActivity.getInstance().reloadBluetooth(false);
-            }
-        })).start();
+        // -- give up and restart BT, without resetting the registered fields.
+        // The restart runs on the serialized Bluetooth executor, which joins this
+        // poller (bounded) only after we have returned from here.
+        MainActivity.debug("ELM327: restarting Bluetooth (via MainActivity executor)");
+        BluetoothManager.getInstance().publishConnecting();
+        MainActivity.restartBluetoothAsync();
 
         return false;
     }
@@ -127,6 +130,11 @@ public class ELM327 extends Device {
         MainActivity.debug("ELM327: version: [" + response + "]");
 
         response = response.trim();
+        if (Thread.currentThread().isInterrupted()) {
+            // we are being stopped, this is not a dongle problem worth a toast
+            lastInitProblem = "initialisation interrupted";
+            return false;
+        }
         if (response.equals("")) {
             lastInitProblem = "ELM is not responding (toughness = " + toughness + ")";
             MainActivity.toast(MainActivity.TOAST_ELM, lastInitProblem);
@@ -248,6 +256,11 @@ public class ELM327 extends Device {
         return deviceIsInitialized;
     }
 
+    /** true once stopAndJoin() or a Bluetooth restart has asked the poller to wind down */
+    private boolean isStopRequested() {
+        return Thread.currentThread().isInterrupted() || !isPollerActive();
+    }
+
     private void killCurrentOperation() {
         // ensure any running operation is stopped
         // sending a return might restart the last command. Bad plan.
@@ -309,8 +322,12 @@ public class ELM327 extends Device {
                     }
                 }
             }
-        } catch (IOException | InterruptedException e) {
-            // ignore
+        } catch (IOException e) {
+            MainActivity.debug("ELM327: flushWithTimeoutCore I/O error: " + e.getMessage());
+        } catch (InterruptedException e) {
+            // preserve the stop request so the poller can wind down
+            Thread.currentThread().interrupt();
+            return false;
         }
         return true;
     }
@@ -348,8 +365,12 @@ public class ELM327 extends Device {
                     Thread.sleep(1);
                 }
             }
-        } catch (IOException | InterruptedException ignored) {
+        } catch (IOException e) {
             // treated as drained; the caller will re-check on the next command
+            MainActivity.debug("ELM327: drainUntilQuiet I/O error: " + e.getMessage());
+        } catch (InterruptedException e) {
+            // preserve the stop request so the poller can wind down
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -389,7 +410,11 @@ public class ELM327 extends Device {
                     Thread.sleep(1);
                 }
             }
-        } catch (IOException | InterruptedException ignored) {
+        } catch (IOException e) {
+            MainActivity.debug("ELM327: stopAtmaAndDrainPrompt I/O error: " + e.getMessage());
+        } catch (InterruptedException e) {
+            // preserve the stop request so the poller can wind down
+            Thread.currentThread().interrupt();
         }
 
         bufferDirty = true;
@@ -407,6 +432,7 @@ public class ELM327 extends Device {
     private boolean initCommandExpectOk(String command, boolean untilEmpty, boolean addReturn) {
         String response = "";
         for (int i = 2; i > 0; i--) {
+            if (Thread.currentThread().isInterrupted()) return false;
             if (untilEmpty) {
                 response = sendAndWaitForAnswer(command, 40, true, -1, addReturn);
             } else {
@@ -483,7 +509,7 @@ public class ELM327 extends Device {
         // wait for answer
         long end = Calendar.getInstance().getTimeInMillis() + generalTimeout;
         boolean timedOut = false;
-        while (!stop && !timedOut) {
+        while (!stop && !timedOut && !Thread.currentThread().isInterrupted()) {
             //MainActivity.debug("Delta = "+(Calendar.getInstance().getTimeInMillis()-start));
             try {
                 // read a byte
@@ -522,7 +548,8 @@ public class ELM327 extends Device {
                                     try {
                                         Thread.sleep(50);
                                     } catch (InterruptedException e) {
-                                        // do nothing
+                                        // preserve the stop request, the loop condition ends the read
+                                        Thread.currentThread().interrupt();
                                     }
                                     stop = (BluetoothManager.getInstance().available() == 0);
                                 } else {
@@ -541,7 +568,8 @@ public class ELM327 extends Device {
                     try {
                         Thread.sleep(2);
                     } catch (InterruptedException e) {
-                        e.printStackTrace();
+                        // preserve the stop request, the loop condition ends the read
+                        Thread.currentThread().interrupt();
                     }
                 }
 
@@ -553,6 +581,13 @@ public class ELM327 extends Device {
             } catch (IOException e) {
                 // ignore: e.printStackTrace();
             }
+        }
+
+        // stopped while waiting: the answer may still arrive, so the next command has to drain first
+        if (Thread.currentThread().isInterrupted()) {
+            bufferDirty = true;
+            MainActivity.debug("ELM327: sendAndWaitForAnswer > interrupted on [" + command + "]");
+            return "";
         }
 
         // set the flag that a timeout has occurred. someThingWrong can be inspected anywhere, but we reset the device after a full filter has been run

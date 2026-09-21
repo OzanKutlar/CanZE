@@ -21,8 +21,13 @@
 
 package lu.fisch.canze.activities;
 
+import android.content.Intent;
 import android.content.res.ColorStateList;
+import android.graphics.drawable.AnimationDrawable;
+import android.graphics.drawable.Drawable;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import androidx.appcompat.app.AppCompatActivity;
 import android.view.Gravity;
 import android.view.View;
@@ -50,12 +55,41 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
     /** colour applied to the text of a value that is no longer being requested */
     private static final int SKIPPED_TEXT_COLOR = 0xFFCC0000;
 
+    /** a reconnect this quick does not deserve a flashing overlay */
+    private static final long RECONNECT_OVERLAY_DELAY_MS = 600;
+    private static final long RECONNECT_FADE_MS = 200;
+
     /** SID -> id of the TextView showing it, populated by addField(sid, interval, viewId) */
     private final HashMap<String, Integer> skipViewIds = new HashMap<>();
     /** original text colours, captured once so un-skipping restores them faithfully */
     private final HashMap<Integer, ColorStateList> originalTextColors = new HashMap<>();
 
     private TextView skipBanner = null;
+
+    private View reconnectOverlay = null;
+    private View reconnectIcon = null;
+    private TextView reconnectStatus = null;
+    private TextView reconnectAttemptText = null;
+    private boolean reconnectOverlayVisible = false;
+    private boolean reconnectOverlayPending = false;
+    private final Handler overlayHandler = new Handler(Looper.getMainLooper());
+    private final Runnable showReconnectOverlay = new Runnable() {
+        @Override
+        public void run() {
+            reconnectOverlayPending = false;
+            setReconnectOverlayVisible(true);
+        }
+    };
+    private final BluetoothManager.ConnectionStateListener connectionStateListener =
+            new BluetoothManager.ConnectionStateListener() {
+                @Override
+                public void onConnectionStateChanged(int state, int attempt) {
+                    handleConnectionState(state, attempt);
+                }
+            };
+
+    /** set when Android recreated this screen without the rest of the app */
+    private boolean processRecreated = false;
 
     private boolean iLeftMyOwn = false;
     private boolean back = false;
@@ -71,23 +105,39 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        if(MainActivity.device!=null)
-            if(!BluetoothManager.getInstance().isConnected()) {
-                // restart Bluetooth
-                MainActivity.debug("CanzeActivity: restarting BT");
-                (new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        try {
-                            BluetoothManager.getInstance().connect();
-                        } catch (InvalidParameterException e) {
-                            MainActivity.toast(-100, "Can't connect. Bluetooth not configured yet?");
-                        }
-                    }
-                })).start();
-                //BluetoothManager.getInstance().connect();
+        MainActivity.debug("CanzeActivity: onCreate (" + this.getClass().getSimpleName() + ")");
+
+        if (MainActivity.getInstance() == null) {
+            // Android killed our process while we were in the background and has now
+            // recreated only this screen. Settings, fields and the device do not exist, so
+            // hand over to the main screen, which sets all of that up properly.
+            // finish() inside onCreate skips onStart/onResume/onPause entirely.
+            processRecreated = true;
+            MainActivity.debug("CanzeActivity: process was recreated, relaunching MainActivity");
+            relaunchMainActivity();
+            return;
+        }
+
+        if (MainActivity.device != null && !BluetoothManager.getInstance().isConnected()) {
+            // restart Bluetooth (returns immediately, connects in the background)
+            MainActivity.debug("CanzeActivity: restarting BT");
+            try {
+                BluetoothManager.getInstance().connect();
+            } catch (InvalidParameterException e) {
+                MainActivity.toast(-100, "Can't connect. Bluetooth not configured yet?");
             }
-        MainActivity.debug("CanzeActivity: onCreate ("+this.getClass().getSimpleName()+")");
+        }
+    }
+
+    private void relaunchMainActivity() {
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            startActivity(intent);
+        } catch (RuntimeException e) {
+            MainActivity.debug("CanzeActivity: could not relaunch MainActivity: " + e.getMessage());
+        }
+        finish();
     }
 
     @Override
@@ -95,61 +145,69 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
         super.onPause();
         MainActivity.debug("CanzeActivity: onPause");
 
-        // done before the early return below, so we never leave a stale listener behind
+        // done before the early returns below, so we never leave a stale listener behind
         Blacklist.getInstance().clearChangeListener(this);
+        detachReconnectOverlay();
+
+        if (processRecreated) return;
 
         // stop here if BT should stay on!
-        if(MainActivity.bluetoothBackgroundMode)
-        {
+        if (MainActivity.bluetoothBackgroundMode) {
             return;
         }
 
-        // if we are not coming back from somewhere, stop Bluetooth
-        if(!back && !widgetClicked) {
-            MainActivity.debug("CanzeActivity: onPause > stopBluetooth");
-            MainActivity.getInstance().stopBluetooth(false);
+        // if we are not coming back from somewhere, stop Bluetooth (never on the UI thread)
+        if (!back && !widgetClicked) {
+            MainActivity.debug("CanzeActivity: onPause > stopBluetooth (async)");
+            MainActivity.stopBluetoothAsync(false);
         }
-        if(!widgetClicked) {
+        if (!widgetClicked) {
             // remember we paused ourselves
-            iLeftMyOwn=true;
+            iLeftMyOwn = true;
         }
         removeFieldListeners();
-        if(MainActivity.getInstance()!=null)
-            MainActivity.getInstance().setDebugListener(null);
+        MainActivity main = MainActivity.getInstance();
+        if (main != null)
+            main.setDebugListener(null);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         MainActivity.debug("CanzeActivity: onResume");
+        if (processRecreated || isFinishing()) return;
+
         // if we paused ourselvers
         if (iLeftMyOwn && !widgetClicked) {
-            MainActivity.debug("CanzeActivity: onResume > reloadBluetooth");
-            // restart Bluetooth
-            MainActivity.getInstance().reloadBluetooth(false);
+            MainActivity.debug("CanzeActivity: onResume > reloadBluetooth (async)");
+            // restart Bluetooth, queued behind the stop issued in onPause
+            MainActivity.reloadBluetoothAsync(false);
             iLeftMyOwn = false;
         }
 
-        if(BluetoothManager.getInstance().isDummyMode())
+        if (BluetoothManager.getInstance().isDummyMode() && MainActivity.device != null)
             MainActivity.device.initConnection();
 
-        if(!widgetClicked) {
+        if (!widgetClicked) {
             MainActivity.debug("CanzeActivity: onResume > initWidgets");
             // initialise the widgets (if any present)
             initWidgets();
         }
-        widgetClicked=false;
+        widgetClicked = false;
         initListeners();
 
         installSkipBanner();
         Blacklist.getInstance().setChangeListener(this);
         applySkipColors();
+
+        attachReconnectOverlay();
     }
 
     @Override
     protected void onDestroy() {
         MainActivity.debug("CanzeActivity: onDestroy");
-        if(!widgetView) {
+        detachReconnectOverlay();
+        if (!widgetView) {
             // free the widget listerners
             freeWidgetListeners();
             // free field listeners
@@ -157,9 +215,8 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
             if (isFinishing()) {
                 MainActivity.debug("CanzeActivity: onDestroy (finishing)");
                 // clear filters
-                if(MainActivity.device!=null)
+                if (MainActivity.device != null)
                     MainActivity.device.clearFields();
-                //MainActivity.registerFields();
             }
         }
         super.onDestroy();
@@ -167,7 +224,7 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
 
     @Override
     public void onBackPressed() {
-        if(MainActivity.isSafe()) {
+        if (MainActivity.isSafe()) {
             super.onBackPressed();
             back = true;
         }
@@ -241,34 +298,6 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
         return result;
     }
 
-    /*
-    public static String compress(String string) throws IOException {
-        ByteArrayOutputStream os = new ByteArrayOutputStream(string.length());
-        GZIPOutputStream gos = new GZIPOutputStream(os);
-        gos.write(string.getBytes());
-        gos.close();
-        byte[] compressed = os.toByteArray();
-        os.close();
-        return Base64.encodeToString(compressed, Base64.NO_WRAP);
-    }
-
-    public static String decompress(String zipText) throws IOException {
-        byte[] compressed = Base64.decode(zipText,Base64.NO_WRAP);
-        final int BUFFER_SIZE = 32;
-        ByteArrayInputStream is = new ByteArrayInputStream(compressed);
-        GZIPInputStream gis = new GZIPInputStream(is, BUFFER_SIZE);
-        StringBuilder string = new StringBuilder();
-        byte[] data = new byte[BUFFER_SIZE];
-        int bytesRead;
-        while ((bytesRead = gis.read(data)) != -1) {
-            string.append(new String(data, 0, bytesRead));
-        }
-        gis.close();
-        is.close();
-        return string.toString();
-    }
-    */
-
     /******* activity field stuff ********************/
 
     protected ArrayList<Field> subscribedFields = new ArrayList<>();
@@ -301,7 +330,8 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
             // add a listener to the field
             field.addListener(this);
             // register it in the queue
-            MainActivity.device.addActivityField(field, intervalMs);
+            if (MainActivity.device != null)
+                MainActivity.device.addActivityField(field, intervalMs);
             // remember this field has been added (filter out doubles)
             if(!subscribedFields.contains(field))
                 subscribedFields.add(field);
@@ -321,6 +351,136 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
         // note: originalTextColors is deliberately NOT cleared. Re-capturing after we
         // already painted a view red would record red as the "original" colour.
         skipViewIds.clear();
+    }
+
+    /* ------------- reconnect overlay ------------- */
+
+    /**
+     * Full-screen "reconnecting" card drawn on top of this screen. It is an overlay rather
+     * than an Activity on purpose: a second Activity would pause this one, and pausing is
+     * exactly what stops Bluetooth here.
+     */
+    private void installReconnectOverlay() {
+        if (reconnectOverlay != null) return;
+
+        ViewGroup content = findViewById(android.R.id.content);
+        if (content == null) return;
+
+        View overlay = getLayoutInflater().inflate(R.layout.overlay_reconnect, content, false);
+        View backButton = overlay.findViewById(R.id.reconnect_back);
+        if (backButton != null) {
+            backButton.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    onBackPressed();
+                }
+            });
+        }
+        content.addView(overlay);
+
+        reconnectOverlay = overlay;
+        reconnectIcon = overlay.findViewById(R.id.reconnect_icon);
+        reconnectStatus = overlay.findViewById(R.id.reconnect_status);
+        reconnectAttemptText = overlay.findViewById(R.id.reconnect_attempt);
+    }
+
+    private void attachReconnectOverlay() {
+        installReconnectOverlay();
+        BluetoothManager manager = BluetoothManager.getInstance();
+        manager.addStateListener(connectionStateListener);
+        // evaluate the state we are coming back to
+        handleConnectionState(manager.getConnectionState(), manager.getConnectionAttempt());
+    }
+
+    private void detachReconnectOverlay() {
+        BluetoothManager.getInstance().removeStateListener(connectionStateListener);
+        cancelPendingReconnectOverlay();
+        setReconnectOverlayVisible(false);
+    }
+
+    private void handleConnectionState(int state, int attempt) {
+        if (reconnectOverlay == null) return;
+
+        if (BluetoothManager.getInstance().isDummyMode()) {
+            cancelPendingReconnectOverlay();
+            setReconnectOverlayVisible(false);
+            return;
+        }
+
+        switch (state) {
+            case BluetoothManager.CONNECTION_CONNECTING:
+            case BluetoothManager.CONNECTION_DISCONNECTED:
+                updateReconnectText(R.string.reconnect_title, attempt);
+                scheduleReconnectOverlay();
+                break;
+            case BluetoothManager.CONNECTION_CONNECTED:
+                // socket is up, the dongle is still being initialised
+                updateReconnectText(R.string.reconnect_initialising, attempt);
+                scheduleReconnectOverlay();
+                break;
+            case BluetoothManager.CONNECTION_READY:
+                cancelPendingReconnectOverlay();
+                setReconnectOverlayVisible(false);
+                break;
+            default:
+                // CONNECTION_STOPPED is a deliberate disconnect (pause, or the first half of a
+                // restart). Leave the overlay as it is; the next state decides.
+                break;
+        }
+    }
+
+    private void scheduleReconnectOverlay() {
+        if (reconnectOverlayVisible || reconnectOverlayPending) return;
+        reconnectOverlayPending = true;
+        overlayHandler.postDelayed(showReconnectOverlay, RECONNECT_OVERLAY_DELAY_MS);
+    }
+
+    private void cancelPendingReconnectOverlay() {
+        reconnectOverlayPending = false;
+        overlayHandler.removeCallbacks(showReconnectOverlay);
+    }
+
+    private void updateReconnectText(int statusRes, int attempt) {
+        if (reconnectStatus != null) reconnectStatus.setText(statusRes);
+        if (reconnectAttemptText == null) return;
+        if (attempt > 0) {
+            reconnectAttemptText.setText(getString(R.string.reconnect_attempt, attempt));
+            reconnectAttemptText.setVisibility(View.VISIBLE);
+        } else {
+            reconnectAttemptText.setVisibility(View.GONE);
+        }
+    }
+
+    private void setReconnectOverlayVisible(boolean visible) {
+        final View overlay = reconnectOverlay;
+        if (overlay == null || visible == reconnectOverlayVisible) return;
+        reconnectOverlayVisible = visible;
+        overlay.animate().cancel();
+
+        if (visible) {
+            overlay.setAlpha(0f);
+            overlay.setVisibility(View.VISIBLE);
+            overlay.bringToFront();
+            overlay.animate().alpha(1f).setDuration(RECONNECT_FADE_MS);
+            setReconnectIconAnimating(true);
+        } else {
+            setReconnectIconAnimating(false);
+            overlay.animate().alpha(0f).setDuration(RECONNECT_FADE_MS).withEndAction(new Runnable() {
+                @Override
+                public void run() {
+                    if (!reconnectOverlayVisible) overlay.setVisibility(View.GONE);
+                }
+            });
+        }
+    }
+
+    private void setReconnectIconAnimating(boolean animating) {
+        if (reconnectIcon == null) return;
+        Drawable background = reconnectIcon.getBackground();
+        if (!(background instanceof AnimationDrawable)) return;
+        AnimationDrawable animation = (AnimationDrawable) background;
+        if (animating) animation.start();
+        else animation.stop();
     }
 
     /* ------------- skipped value feedback ------------- */
@@ -437,4 +597,3 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
 
     protected abstract void initListeners();
 }
-

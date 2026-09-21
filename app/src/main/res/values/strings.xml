@@ -635,5 +635,12 @@
 
     <string name="title_activity_widget">WidgetActivity</string>
 
+    <!-- Reconnect overlay -->
+
+    <string name="reconnect_title">Reconnecting to the dongle…</string>
+    <string name="reconnect_initialising">Connected, initialising the dongle…</string>
+    <string name="reconnect_attempt">Attempt %1$d</string>
+    <string name="reconnect_back">Back to main menu</string>
+
 
 </resources>

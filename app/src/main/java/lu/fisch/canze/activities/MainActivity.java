@@ -59,6 +59,9 @@ import android.widget.Toast;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 import lu.fisch.canze.R;
 import lu.fisch.canze.actors.Field;
@@ -137,9 +140,15 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
 
     public static Fields fields = Fields.getInstance();
 
-    public static Device device = null;
+    public static volatile Device device = null;
 
-    private static MainActivity instance = null;
+    private static volatile MainActivity instance = null;
+
+    /** ignore ACL disconnect broadcasts this soon after we closed the link ourselves */
+    private static final long ACL_IGNORE_WINDOW_MS = 10000;
+
+    /** runs every Bluetooth stop/reconnect off the UI thread, one at a time and in order */
+    private static final ExecutorService BLUETOOTH_EXECUTOR = Executors.newSingleThreadExecutor();
 
     public static boolean safeDrivingMode = true;
     public static boolean bluetoothBackgroundMode = false;
@@ -173,33 +182,53 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
     private final BroadcastReceiver broadcastReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            String action = intent.getAction();
-            // BluetoothDevice bluetoothDevice = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+            if (intent == null || !BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(intent.getAction()))
+                return;
 
-            if (BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)) {
-                //Device has disconnected
-
-                // only resume if this activity is also visible
-                if (visible) {
-                    // stop reading
-                    if (device != null)
-                        device.stopAndJoin();
-
-                    // inform user
-                    setTitle(TAG + " - disconnected");
-                    setBluetoothState(BLUETOOTH_DISCONNECTED);
-                    toast(R.string.toast_BluetoothLost);
-
-                    // try to reconnect
-                    onResume();
-                }
+            // headphones, car stereos, ... are none of our business
+            if (!isOurDongle(intent)) {
+                debug("MainActivity: ignoring ACL disconnect of another Bluetooth device");
+                return;
             }
+
+            // Android reports the link going down a few seconds after we closed it ourselves
+            // (pause, restart). By then we may already be on a fresh connection, which the
+            // old code used to kill again.
+            BluetoothManager manager = BluetoothManager.getInstance();
+            if (manager.isStopped() || manager.wasStoppedWithin(ACL_IGNORE_WINDOW_MS)) {
+                debug("MainActivity: ignoring ACL disconnect caused by our own disconnect");
+                return;
+            }
+
+            // a real signal loss: inform the user and reconnect, all off the UI thread
+            if (visible) {
+                setTitle(TAG + " - disconnected");
+                setBluetoothState(BLUETOOTH_DISCONNECTED);
+            }
+            toast(R.string.toast_BluetoothLost);
+            manager.publishConnecting();
+            restartBluetoothAsync();
         }
     };
 
+    private static boolean isOurDongle(Intent intent) {
+        String ours = bluetoothDeviceAddress;
+        if (ours == null || ours.isEmpty()) return false;
+        try {
+            BluetoothDevice lost = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+            return lost != null && ours.equalsIgnoreCase(lost.getAddress());
+        } catch (RuntimeException e) {
+            debug("MainActivity: could not read the disconnected device: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * @return the live MainActivity, or null if Android killed the process and has only
+     * recreated a sub screen so far. Never construct an Activity by hand: it has no Context
+     * and crashes on the first runOnUiThread / getSharedPreferences.
+     */
     public static MainActivity getInstance() {
-        if (instance == null)
-            instance = new MainActivity();
         return instance;
     }
 
@@ -314,6 +343,11 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
             }
 
             // as the settings may have changed, we need to reload different things
+
+            // stop the poller of the device we are about to replace, otherwise it keeps
+            // talking to the dongle alongside the new one (bounded, see Device.stopAndJoin)
+            Device previousDevice = device;
+            if (previousDevice != null) previousDevice.stopAndJoin();
 
             // create a new device
             switch (deviceType) {
@@ -545,12 +579,7 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
                     setBluetoothState(BLUETOOTH_DISCONNECTED);
                 }
             });
-            (new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    reloadBluetooth();
-                }
-            })).start();
+            reloadBluetoothAsync(true);
         }
 
         final SharedPreferences settings = getSharedPreferences(PREFERENCES_FILE, 0);
@@ -644,7 +673,7 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
             if (device != null)
                 device.clearFields();
             debug("MainActivity.onPause: stopping BT");
-            stopBluetooth();
+            stopBluetoothAsync(true);
         }
 
         super.onPause();
@@ -654,19 +683,88 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
         stopBluetooth(true);
     }
 
+    /** Blocking (bounded). UI code should use stopBluetoothAsync() instead. */
     public void stopBluetooth(boolean reset) {
-        if (device != null) {
+        stopBluetoothNow(reset);
+    }
+
+    private static void stopBluetoothNow(boolean reset) {
+        Device current = device;
+        if (current != null) {
             // stop the device
             debug("MainActivity.stopBluetooth > stopAndJoin");
-            device.stopAndJoin();
+            current.stopAndJoin();
             // remove reference
             if (reset) {
-                device.clearFields();
+                current.clearFields();
             }
         }
         // disconnect BT
         debug("MainActivity.stopBluetooth > BT disconnect");
         BluetoothManager.getInstance().disconnect();
+    }
+
+    private static void reloadBluetoothNow(boolean reloadSettings) {
+        MainActivity main = instance;
+        // re-load the settings if asked to
+        if (reloadSettings && main != null)
+            main.loadSettings();
+
+        String address = bluetoothDeviceAddress;
+        if (address == null || address.isEmpty()) {
+            debug("MainActivity.reloadBluetooth > no dongle configured, not connecting");
+            return;
+        }
+        // returns immediately, the connection is made on a background thread
+        BluetoothManager.getInstance().connect(address, true, BluetoothManager.RETRIES_INFINITE);
+    }
+
+    /** Stop Bluetooth without blocking the caller. Runs after every earlier request. */
+    public static void stopBluetoothAsync(final boolean reset) {
+        submitBluetoothTask("stop", new Runnable() {
+            @Override
+            public void run() {
+                stopBluetoothNow(reset);
+            }
+        });
+    }
+
+    /** Reconnect without blocking the caller. Runs after every earlier request. */
+    public static void reloadBluetoothAsync(final boolean reloadSettings) {
+        submitBluetoothTask("reload", new Runnable() {
+            @Override
+            public void run() {
+                reloadBluetoothNow(reloadSettings);
+            }
+        });
+    }
+
+    /** Drop the link and reconnect, keeping the registered fields. Safe from any thread. */
+    public static void restartBluetoothAsync() {
+        submitBluetoothTask("restart", new Runnable() {
+            @Override
+            public void run() {
+                stopBluetoothNow(false);
+                reloadBluetoothNow(false);
+            }
+        });
+    }
+
+    private static void submitBluetoothTask(final String name, final Runnable task) {
+        try {
+            BLUETOOTH_EXECUTOR.execute(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        task.run();
+                    } catch (RuntimeException e) {
+                        debug("MainActivity: Bluetooth " + name + " task failed: " + e);
+                    }
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            debug("MainActivity: Bluetooth " + name + " task rejected: " + e.getMessage());
+        }
     }
 
     @Override
@@ -698,13 +796,8 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
 
         dataLogger.destroy(); // clean up
 
-        if (device != null) {
-            // stop the device nicely
-            device.stopAndJoin();
-            device.clearFields();
-        }
-        // disconnect the bluetooth
-        BluetoothManager.getInstance().disconnect();
+        // stop the device nicely and disconnect the bluetooth, off the UI thread
+        stopBluetoothAsync(true);
 
         // un-register for bluetooth changes
         this.unregisterReceiver(broadcastReceiver);
@@ -729,14 +822,9 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
         imageView.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                (new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        toast(getStringSingle(R.string.toast_Reconnecting));
-                        stopBluetooth();
-                        reloadBluetooth();
-                    }
-                })).start();
+                toast(getStringSingle(R.string.toast_Reconnecting));
+                stopBluetoothAsync(true);
+                reloadBluetoothAsync(true);
             }
         });
 
