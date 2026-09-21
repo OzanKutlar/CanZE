@@ -35,6 +35,7 @@ import android.widget.Button;
 
 import lu.fisch.canze.R;
 import lu.fisch.canze.activities.FluenceKangooTempsActivity;
+import lu.fisch.canze.activities.BatteryFullscreenActivity;
 import lu.fisch.canze.activities.DashActivity;
 import lu.fisch.canze.activities.MainActivity;
 
@@ -55,6 +56,7 @@ public class ExperimentalFragment extends Fragment {
 
         activateButton(view, R.id.buttonDash, DashActivity.class);
         activateButton(view, R.id.buttonFluenceKangooTemps, FluenceKangooTempsActivity.class);
+        activateButton(view, R.id.buttonBatteryFullscreen, BatteryFullscreenActivity.class);
 
         return view;
     }

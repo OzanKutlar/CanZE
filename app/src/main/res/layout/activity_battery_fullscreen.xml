@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0B0F19"
+    android:keepScreenOn="true"
+    tools:context="lu.fisch.canze.activities.BatteryFullscreenActivity">
+
+    <lu.fisch.canze.widgets.BatteryLiquidView
+        android:id="@+id/batteryLiquidView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clickable="true"
+        android:focusable="true"
+        android:contentDescription="Battery state of charge" />
+
+    <TextView
+        android:id="@+id/textDebug"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:padding="6dp"
+        android:textColor="#55FFFFFF"
+        android:textSize="10sp" />
+
+</FrameLayout>
