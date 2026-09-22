@@ -26,13 +26,14 @@ import java.util.Locale;
 
 import lu.fisch.canze.R;
 import lu.fisch.canze.actors.Field;
+import lu.fisch.canze.devices.Device;
 import lu.fisch.canze.interfaces.DebugListener;
 import lu.fisch.canze.interfaces.FieldListener;
 
 /**
  * Modern Dashboard Activity.
  * Displays:
- *  - Vehicle speed (2 decimal places)
+ *  - Vehicle speed (whole km/h, passive frame 5D7)
  *  - Battery percentage (SoC, 2 decimal places)
  *  - Battery temperature (°C)
  *  - Gear position (PRND)
@@ -40,21 +41,31 @@ import lu.fisch.canze.interfaces.FieldListener;
  */
 public class DashActivity extends CanzeActivity implements FieldListener, DebugListener {
 
-    // Diagnostic SIDs from 7EC (EVC)
-    private static final String SID_Speed       = "7ec.622003.24";
+    // Passive SIDs (broadcast frames, cheap to read)
     // User SoC, the same field the Battery screen shows. Passive CAN frame 42E,
     // 13 bits at resolution 0.02 with 2 decimals, so the two-decimal display is
     // native to the field. Deliberately NOT the EVC PID 622002, whose rows in
     // _Fields.csv carry conflicting scaling.
     private static final String SID_UserSoC     = "42e.0";
+    // Diagnostic SIDs from 7EC (EVC), each one an ISO-TP round trip
     private static final String SID_BatTemp     = "7ec.622001.24";
     private static final String SID_Gear        = "7ec.622238.29";
     private static final String SID_AcAuth      = "7ec.62332f.31";
     private static final String SID_AcReq       = "7ec.6233a2.31";
     private static final String SID_AcPwr       = "7ec.6233a7.24";
 
-    // Passive CAN speed fallback
+    // Passive CAN speed (frame 5D7, whole km/h). The EVC diagnostic speed PID was
+    // dropped: it cost an ISO-TP round trip for decimals that are not needed here.
     private static final String SID_SpeedPassive = "5d7.0";
+
+    // Polling. SoC is the headline value on this screen, so it follows the pattern in
+    // MotorActivity: registered as INTERVAL_ASAPFAST, the ELM327 stays on the 42E
+    // filter and spends every spare slot on SoC. All other fields are scheduled and
+    // always pre-empt the ASAP field when they fall due.
+    private static final int INTERVAL_SPEED_MS   = 300;   // passive 5D7, ~3 Hz
+    private static final int INTERVAL_GEAR_MS    = 1500;  // ISO-TP
+    private static final int INTERVAL_AC_MS      = 3000;  // ISO-TP, three PIDs
+    private static final int INTERVAL_BATTEMP_MS = 5000;  // ISO-TP, changes slowly
 
     private static final int COLOR_CYAN    = Color.parseColor("#00E5FF");
     private static final int COLOR_GREEN   = Color.parseColor("#00E676");
@@ -102,14 +113,13 @@ public class DashActivity extends CanzeActivity implements FieldListener, DebugL
     protected void initListeners() {
         MainActivity.getInstance().setDebugListener(this);
 
-        addField(SID_Speed, 1000);
-        addField(SID_SpeedPassive, 500);
-        addField(SID_UserSoC, 3000);
-        addField(SID_BatTemp, 3000);
-        addField(SID_Gear, 1000);
-        addField(SID_AcAuth, 2000);
-        addField(SID_AcReq, 2000);
-        addField(SID_AcPwr, 2000);
+        addField(SID_UserSoC, Device.INTERVAL_ASAPFAST);
+        addField(SID_SpeedPassive, INTERVAL_SPEED_MS);
+        addField(SID_Gear, INTERVAL_GEAR_MS);
+        addField(SID_AcAuth, INTERVAL_AC_MS);
+        addField(SID_AcReq, INTERVAL_AC_MS);
+        addField(SID_AcPwr, INTERVAL_AC_MS);
+        addField(SID_BatTemp, INTERVAL_BATTEMP_MS);
     }
 
     @Override
@@ -129,11 +139,11 @@ public class DashActivity extends CanzeActivity implements FieldListener, DebugL
         final double val = field.getValue();
         if (Double.isNaN(val)) return;
 
-        // Speed (2 decimal places)
-        if (sid.equals(SID_Speed) || sid.equals(SID_SpeedPassive)) {
+        // Speed (whole km/h, the native resolution of 5d7.0)
+        if (sid.equals(SID_SpeedPassive)) {
             TextView tvSpeed = findViewById(R.id.textSpeed);
             if (tvSpeed != null) {
-                tvSpeed.setText(String.format(Locale.getDefault(), "%.2f", val));
+                tvSpeed.setText(String.format(Locale.getDefault(), "%d", Math.round(val)));
             }
             TextView tvUnit = findViewById(R.id.textSpeedUnit);
             if (tvUnit != null) {
