@@ -113,6 +113,10 @@
             android:name=".activities.BatteryFullscreenActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:label="Battery" />
+        <activity
+            android:name=".activities.HudActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:label="@string/title_activity_hud" />
         <activity android:name=".activities.CanSeeActivity"></activity>
     </application>
 

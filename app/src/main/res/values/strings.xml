@@ -448,6 +448,18 @@
     <string name="title_activity_dash">Dash</string>
     <string name="button_Dash">Dash</string>
 
+    <!-- Car HUD -->
+
+    <string name="title_activity_hud">Car HUD</string>
+    <string name="button_Hud">Car HUD</string>
+    <string name="hud_no_value">&#8211;</string>
+    <string name="hud_unit_kmh">km/h</string>
+    <string name="hud_unit_mph">mph</string>
+    <string name="hud_label_soc" formatted="false">SoC %</string>
+    <string name="hud_label_gear">GEAR</string>
+    <string name="hud_demo_start">Start demo</string>
+    <string name="hud_demo_badge">DEMO &#183; tap to stop</string>
+
     <!-- Driving -->
 
     <string name="title_activity_driving">Driving info</string>

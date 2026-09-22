@@ -37,6 +37,7 @@ import lu.fisch.canze.R;
 import lu.fisch.canze.activities.FluenceKangooTempsActivity;
 import lu.fisch.canze.activities.BatteryFullscreenActivity;
 import lu.fisch.canze.activities.DashActivity;
+import lu.fisch.canze.activities.HudActivity;
 import lu.fisch.canze.activities.MainActivity;
 
 /**
@@ -57,17 +58,31 @@ public class ExperimentalFragment extends Fragment {
         activateButton(view, R.id.buttonDash, DashActivity.class);
         activateButton(view, R.id.buttonFluenceKangooTemps, FluenceKangooTempsActivity.class);
         activateButton(view, R.id.buttonBatteryFullscreen, BatteryFullscreenActivity.class);
+        // The HUD offers a demo mode, so it must open even without a configured adapter.
+        activateButton(view, R.id.buttonHud, HudActivity.class, false);
 
         return view;
     }
 
     private void activateButton(View view, int buttonId, final Class<?> activityClass) {
+        activateButton(view, buttonId, activityClass, true);
+    }
+
+    /**
+     * @param requiresDevice false for screens that work without a configured adapter
+     *                       (they offer a demo mode instead)
+     */
+    private void activateButton(View view, int buttonId, final Class<?> activityClass, final boolean requiresDevice) {
         Button button = view.findViewById(buttonId);
+        if (button == null) {
+            MainActivity.debug("ExperimentalFragment: button " + buttonId + " not found in layout");
+            return;
+        }
         button.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (!MainActivity.isSafe()) return;
-                if (MainActivity.device == null) {
+                if (requiresDevice && MainActivity.device == null) {
                     MainActivity.toast("You first need to adjust the settings ...");
                     return;
                 }
