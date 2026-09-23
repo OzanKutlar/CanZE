@@ -39,6 +39,7 @@ import android.graphics.Point;
 import android.graphics.drawable.AnimationDrawable;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 
 import androidx.core.content.ContextCompat;
 import androidx.viewpager.widget.ViewPager;
@@ -150,6 +151,22 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
     /** runs every Bluetooth stop/reconnect off the UI thread, one at a time and in order */
     private static final ExecutorService BLUETOOTH_EXECUTOR = Executors.newSingleThreadExecutor();
 
+    /** how often the history database is trimmed */
+    private static final long CLEANUP_INTERVAL_MS = 60L * 60L * 1000L;
+
+    /** speed poll for safe driving mode. 10 s made the lock-out react far too late */
+    private static final int SAFE_MODE_SPEED_INTERVAL_MS = 2000;
+
+    private final Handler cleanUpHandler = new Handler(Looper.getMainLooper());
+    private final Runnable cleanUpTask = new Runnable() {
+        @Override
+        public void run() {
+            // the delete itself runs on the database writer thread
+            CanzeDataSource.getInstance().cleanUpAsync();
+            cleanUpHandler.postDelayed(this, CLEANUP_INTERVAL_MS);
+        }
+    };
+
     public static boolean safeDrivingMode = true;
     public static boolean bluetoothBackgroundMode = false;
     public static boolean debugLogMode = false;
@@ -164,6 +181,9 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
 
     public static boolean milesMode = false;
     public static int toastLevel = 1;
+
+    /** reuse the ELM327 ISO-TP header between requests to the same ECU (experimental, default off) */
+    public static volatile boolean elmHeaderCache = false;
 
     private DebugListener debugListener = null;
 
@@ -304,6 +324,7 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
             debugLogMode = settings.getBoolean("optDebugLog", false);
             fieldLogMode = settings.getBoolean("optFieldLog", false);
             toastLevel = settings.getInt("optToast", 1);
+            elmHeaderCache = settings.getBoolean("optElmHeaderCache", false);
 
             if (bluetoothDeviceName != null && !bluetoothDeviceName.isEmpty() && bluetoothDeviceName.length() > 4)
                 BluetoothManager.getInstance().setDummyMode(bluetoothDeviceName.substring(0, 4).compareTo("HTTP") == 0);
@@ -344,38 +365,19 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
 
             // as the settings may have changed, we need to reload different things
 
-            // stop the poller of the device we are about to replace, otherwise it keeps
-            // talking to the dongle alongside the new one (bounded, see Device.stopAndJoin)
-            Device previousDevice = device;
-            if (previousDevice != null) previousDevice.stopAndJoin();
-
-            // create a new device
-            switch (deviceType) {
-                case "Bob Due":
-                    device = new BobDue();
-                    break;
-                case "ELM327":
-                    device = new ELM327();
-                    break;
-                case "ELM327Http":
-                    device = new ELM327OverHttp();
-                    break;
-                default:
-                    device = null;
-                    break;
-            }
+            // Publish the new device first, so every screen registering fields from now on
+            // talks to it. It does not poll yet: the old poller may still own the dongle.
+            final Device previousDevice = device;
+            device = createDevice(deviceType);
 
             // since the car type may have changed, reload the frame timings and fields
+            // (this also registers the application wide fields on the new device)
             Frames.getInstance().load();
             fields.load();
 
-            if (device != null) {
-                // initialise the connection
-                device.initConnection();
-
-                // register application wide fields
-                // registerApplicationFields(); // now done in Fields.load
-            }
+            // Hand the dongle over off the UI thread: stopping the old poller can block for
+            // several seconds, which must never happen on the main thread.
+            swapDeviceAsync(previousDevice, device);
 
             // after loading PREFERENCES we may have new values for "dataExportMode"
             dataExportMode = dataLogger.activate(dataExportMode);
@@ -387,14 +389,43 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
         }
     }
 
+    private static Device createDevice(String deviceType) {
+        if (deviceType == null) return null;
+        switch (deviceType) {
+            case "Bob Due":
+                return new BobDue();
+            case "ELM327":
+                return new ELM327();
+            case "ELM327Http":
+                return new ELM327OverHttp();
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * Stops the old poller (bounded join) and only then starts the new one, serialized with
+     * every other Bluetooth task, so two pollers never talk to the dongle at the same time.
+     */
+    private static void swapDeviceAsync(final Device previous, final Device next) {
+        submitBluetoothTask("device swap", new Runnable() {
+            @Override
+            public void run() {
+                if (previous != null && previous != next) previous.stopAndJoin();
+                // a later settings reload may already have replaced 'next'
+                if (next != null && next == device) next.initConnection();
+            }
+        });
+    }
+
     public void registerApplicationFields() {
         if (safeDrivingMode) {
             // speed
             Field field = fields.getBySID("5d7.0");
             if (field != null) {
-                field.addListener(MainActivity.getInstance()); // callback is onFieldUpdateEvent
+                field.addListener(this); // callback is onFieldUpdateEvent
                 if (device != null)
-                    device.addApplicationField(field, 10000); // query every second
+                    device.addApplicationField(field, SAFE_MODE_SPEED_INTERVAL_MS);
             }
         } else {
             Field field = fields.getBySID("5d7.0");
@@ -465,20 +496,12 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
         setTitle(TAG + " - not connected");
         setBluetoothState(BLUETOOTH_DISCONNECTED);
 
-        // open the database
-        CanzeDataSource.getInstance(getBaseContext()).open();
-        // cleanup
-        CanzeDataSource.getInstance().cleanUp();
-
-        // setup cleaning (once every hour)
-        Runnable cleanUpRunnable = new Runnable() {
-            @Override
-            public void run() {
-                CanzeDataSource.getInstance().cleanUp();
-            }
-        };
-        Handler handler = new Handler();
-        handler.postDelayed(cleanUpRunnable, 60 * 1000);
+        // open the database and trim it right away, off the UI thread
+        CanzeDataSource.getInstance(getApplicationContext()).open();
+        CanzeDataSource.getInstance().cleanUpAsync();
+        // then trim it again every hour for as long as the app runs
+        cleanUpHandler.removeCallbacks(cleanUpTask);
+        cleanUpHandler.postDelayed(cleanUpTask, CLEANUP_INTERVAL_MS);
 
 
         // register for bluetooth changes
@@ -494,7 +517,8 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
 
             @Override
             public void onAfterConnect(BluetoothSocket bluetoothSocket) {
-                device.init(visible);
+                Device current = device;
+                if (current != null) current.init(visible);
 
                 // set title
                 debug("MainActivity: onAfterConnect > set title");
@@ -573,13 +597,10 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
         }
 
         if (!leaveBluetoothOn) {
-            runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    setBluetoothState(BLUETOOTH_DISCONNECTED);
-                }
-            });
-            reloadBluetoothAsync(true);
+            setBluetoothState(BLUETOOTH_DISCONNECTED);
+            // settings are (re)loaded here on the UI thread, the connection is made in the background
+            loadSettings();
+            reloadBluetoothAsync(false);
         }
 
         final SharedPreferences settings = getSharedPreferences(PREFERENCES_FILE, 0);
@@ -649,12 +670,12 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
     }
 
     public void reloadBluetooth(boolean reloadSettings) {
-        // re-load the settings if asked to
-        if (reloadSettings)
-            loadSettings();
-
-        // try to get a new BT thread
-        BluetoothManager.getInstance().connect(bluetoothDeviceAddress, true, BluetoothManager.RETRIES_INFINITE);
+        if (reloadSettings) {
+            // settings must be reloaded on the UI thread; the connect follows in order
+            reloadBluetoothAsync(true);
+            return;
+        }
+        reloadBluetoothNow();
     }
 
     @Override
@@ -704,12 +725,7 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
         BluetoothManager.getInstance().disconnect();
     }
 
-    private static void reloadBluetoothNow(boolean reloadSettings) {
-        MainActivity main = instance;
-        // re-load the settings if asked to
-        if (reloadSettings && main != null)
-            main.loadSettings();
-
+    private static void reloadBluetoothNow() {
         String address = bluetoothDeviceAddress;
         if (address == null || address.isEmpty()) {
             debug("MainActivity.reloadBluetooth > no dongle configured, not connecting");
@@ -729,12 +745,31 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
         });
     }
 
-    /** Reconnect without blocking the caller. Runs after every earlier request. */
+    /**
+     * Reconnect without blocking the caller. Runs after every earlier request.
+     * With reloadSettings the settings are first reloaded on the UI thread (immediately when
+     * called from it), never on the Bluetooth executor.
+     */
     public static void reloadBluetoothAsync(final boolean reloadSettings) {
+        final MainActivity main = instance;
+        if (reloadSettings && main != null) {
+            main.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    main.loadSettings();
+                    submitReload();
+                }
+            });
+            return;
+        }
+        submitReload();
+    }
+
+    private static void submitReload() {
         submitBluetoothTask("reload", new Runnable() {
             @Override
             public void run() {
-                reloadBluetoothNow(reloadSettings);
+                reloadBluetoothNow();
             }
         });
     }
@@ -745,7 +780,7 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
             @Override
             public void run() {
                 stopBluetoothNow(false);
-                reloadBluetoothNow(false);
+                reloadBluetoothNow();
             }
         });
     }
@@ -777,8 +812,9 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
         leaveBluetoothOn = false;
 
         if (requestCode == SETTINGS_ACTIVITY) {
-            // load settings
-            loadSettings();
+            // nothing to do: leaveBluetoothOn is false now, so onResume (which follows right
+            // after this) reloads the settings and reconnects. Loading here parsed them twice.
+            MainActivity.debug("MainActivity.onActivityResult > settings closed, onResume reloads");
         } else if (requestCode == LEAVE_BLUETOOTH_ON) {
             MainActivity.debug("MainActivity.onActivityResult > " + LEAVE_BLUETOOTH_ON);
             returnFromWidget = true;
@@ -795,6 +831,7 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
         debug("MainActivity: onDestroy");
 
         dataLogger.destroy(); // clean up
+        cleanUpHandler.removeCallbacks(cleanUpTask);
 
         // stop the device nicely and disconnect the bluetooth, off the UI thread
         stopBluetoothAsync(true);
@@ -832,42 +869,47 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
     }
 
 
-    private void setBluetoothState(int btState) {
-        if (bluetoothMenutItem != null) {
-            View view = bluetoothMenutItem.getActionView();
-            if (view == null) return;
-            final ImageView imageView = view.findViewById(R.id.animated_menu_item_action);
-
-            // stop the animation if there is one running
-            AnimationDrawable frameAnimation;
-            if (imageView.getBackground() instanceof AnimationDrawable) {
-                frameAnimation = (AnimationDrawable) imageView.getBackground();
-                if (frameAnimation.isRunning())
-                    frameAnimation.stop();
+    /** Safe to call from any thread: the icon is always updated on the UI thread. */
+    private void setBluetoothState(final int btState) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                applyBluetoothState(btState);
             }
+        });
+    }
 
-            switch (btState) {
-                case BLUETOOTH_DISCONNECTED:
-                    imageView.setBackgroundResource(R.mipmap.bluetooth_none);
-                    break;
-                case BLUETOOTH_CONNECTED:
-                    imageView.setBackgroundResource(R.mipmap.bluetooth_3);
-                    break;
-                case BLUETOOTH_SEARCH:
-                    runOnUiThread(new Runnable() {
-                        @SuppressLint("NewApi")
-                        @Override
-                        public void run() {
-                            imageView.setBackgroundResource(R.drawable.animation_bluetooth);
-                            AnimationDrawable frameAnimation = (AnimationDrawable) imageView.getBackground();
-                            frameAnimation.start();
-                        }
-                    });
-                    break;
-                default:
-                    break;
-            }
+    private void applyBluetoothState(int btState) {
+        MenuItem item = bluetoothMenutItem;
+        if (item == null) return;
+        View view = item.getActionView();
+        if (view == null) return;
+        ImageView imageView = view.findViewById(R.id.animated_menu_item_action);
+        if (imageView == null) return;
+
+        stopIconAnimation(imageView);
+        switch (btState) {
+            case BLUETOOTH_DISCONNECTED:
+                imageView.setBackgroundResource(R.mipmap.bluetooth_none);
+                break;
+            case BLUETOOTH_CONNECTED:
+                imageView.setBackgroundResource(R.mipmap.bluetooth_3);
+                break;
+            case BLUETOOTH_SEARCH:
+                imageView.setBackgroundResource(R.drawable.animation_bluetooth);
+                if (imageView.getBackground() instanceof AnimationDrawable) {
+                    ((AnimationDrawable) imageView.getBackground()).start();
+                }
+                break;
+            default:
+                break;
         }
+    }
+
+    private static void stopIconAnimation(ImageView imageView) {
+        if (!(imageView.getBackground() instanceof AnimationDrawable)) return;
+        AnimationDrawable animation = (AnimationDrawable) imageView.getBackground();
+        if (animation.isRunning()) animation.stop();
     }
 
     @Override
@@ -933,8 +975,9 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
 
     public static boolean isSafe() {
         boolean safe = !isDriving || !safeDrivingMode;
-        if (!safe) {
-            Toast.makeText(MainActivity.instance, R.string.toast_NotWhileDriving, Toast.LENGTH_LONG).show();
+        MainActivity main = instance;
+        if (!safe && main != null) {
+            Toast.makeText(main, R.string.toast_NotWhileDriving, Toast.LENGTH_LONG).show();
         }
         return safe;
     }
@@ -986,7 +1029,7 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
             SharedPreferences.Editor editor = settings.edit();
             editor.putString("appVersion", currentVersion);
             editor.apply();
-            finish();
+            // no finish() here: it closed the app on the first launch after every update
         }
     }
 
