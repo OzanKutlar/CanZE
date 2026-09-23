@@ -117,6 +117,10 @@
             android:name=".activities.HudActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:label="@string/title_activity_hud" />
+        <activity
+            android:name=".activities.ChargingHudActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:label="@string/title_activity_charging_hud" />
         <activity android:name=".activities.CanSeeActivity"></activity>
     </application>
 

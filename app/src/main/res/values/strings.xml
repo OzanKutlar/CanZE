@@ -460,6 +460,16 @@
     <string name="hud_demo_start">Start demo</string>
     <string name="hud_demo_badge">DEMO &#183; tap to stop</string>
 
+    <!-- Charging HUD -->
+
+    <string name="title_activity_charging_hud">Charging HUD</string>
+    <string name="button_ChargingHud">Charging HUD</string>
+    <string name="charging_hud_label_power">CHARGING kW</string>
+    <string name="charging_hud_label_time">TIME &#183; HOLD TO RESET</string>
+    <string name="charging_hud_label_energy">kWh ADDED</string>
+    <string name="charging_hud_full_in">full in %1$s</string>
+    <string name="charging_hud_hold_hint">Hold the time panel to reset the session</string>
+
     <!-- Driving -->
 
     <string name="title_activity_driving">Driving info</string>

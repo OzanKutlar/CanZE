@@ -36,6 +36,7 @@ import android.widget.Button;
 import lu.fisch.canze.R;
 import lu.fisch.canze.activities.FluenceKangooTempsActivity;
 import lu.fisch.canze.activities.BatteryFullscreenActivity;
+import lu.fisch.canze.activities.ChargingHudActivity;
 import lu.fisch.canze.activities.DashActivity;
 import lu.fisch.canze.activities.HudActivity;
 import lu.fisch.canze.activities.MainActivity;
@@ -60,6 +61,7 @@ public class ExperimentalFragment extends Fragment {
         activateButton(view, R.id.buttonBatteryFullscreen, BatteryFullscreenActivity.class);
         // The HUD offers a demo mode, so it must open even without a configured adapter.
         activateButton(view, R.id.buttonHud, HudActivity.class, false);
+        activateButton(view, R.id.buttonChargingHud, ChargingHudActivity.class, false);
 
         return view;
     }
