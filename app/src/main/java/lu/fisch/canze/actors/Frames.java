@@ -24,66 +24,78 @@ package lu.fisch.canze.actors;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 
 import lu.fisch.canze.activities.MainActivity;
 
 /**
  * Frames
+ *
+ * Lookups go through a map keyed by id and response id instead of a linear scan (every ISO-TP
+ * field definition looked up its frame, which made loading quadratic). A reload builds a new list
+ * and swaps it in under the lock, so other threads never see a half filled list.
  */
 public class Frames {
 
-    private static final int FRAME_ID               = 0; // to be stated in HEX, no leading 0x
-    private static final int FRAME_INTERVAL_ZOE     = 1; // decimal
-    private static final int FRAME_INTTERVAL_FLUKAN = 2; // decimal
-    private static final int FRAME_ECU              = 3; // double
-
-    private final ArrayList<Frame> frames = new ArrayList<>();
+    private static final int FRAME_ID = 0;              // hex, no leading 0x
+    private static final int FRAME_INTERVAL_ZOE = 1;    // decimal
+    private static final int FRAME_INTERVAL_FLUKAN = 2; // decimal
+    private static final int FRAME_ECU = 3;
 
     private static Frames instance = null;
+
+    private final Object lock = new Object();
+    private ArrayList<Frame> frames = new ArrayList<>();
+    private HashMap<String, Frame> byKey = new HashMap<>();
 
     private Frames() {
         load();
     }
 
-    public static Frames getInstance()
-    {
-        if(instance==null) instance=new Frames();
+    public static synchronized Frames getInstance() {
+        if (instance == null) instance = new Frames();
         return instance;
     }
 
-
-    private void fillOneLine(String line) {
-        if (line.contains("#")) line = line.substring(0, line.indexOf('#'));
-        //Get all tokens available in line
-        String[] tokens = line.split(",");
-        if (tokens.length == 4) {
-            //Create a new field object and fill his  data
-            Ecu ecu = Ecus.getInstance().getByMnemonic(tokens[FRAME_ECU].trim());
-            if (ecu == null) {
-                MainActivity.debug("Ecu does not exist:" + tokens[FRAME_ECU].trim());
-            } else {
-                int frameId = Integer.parseInt(tokens[FRAME_ID].trim(), 16);
-                int interval = MainActivity.car == MainActivity.CAR_ZOE_Q210 || MainActivity.car == MainActivity.CAR_ZOE_R240 ? Integer.parseInt(tokens[FRAME_INTERVAL_ZOE].trim(), 10) : Integer.parseInt(tokens[FRAME_INTTERVAL_FLUKAN].trim(), 10);
-                Frame frame = getById(frameId);
-                if (frame == null) {
-                    frame = new Frame(
-                            frameId,
-                            interval,
-                            ecu,
-                            null,
-                            null
-                    );
-                } else {
-                    frame.setInterval(interval);
-                }
-                // add the field to the list of available fields
-                add(frame);
-            }
-        }
+    private static String key(int id, String responseId) {
+        return responseId == null ? id + "#" : id + "=" + responseId;
     }
 
-    private void fillFromAsset (String assetName) {
-        //Read text from asset
+    private void fillOneLine(String line, ArrayList<Frame> list, HashMap<String, Frame> map) {
+        if (line.contains("#")) line = line.substring(0, line.indexOf('#'));
+        String[] tokens = line.split(",");
+        if (tokens.length != 4) return;
+
+        Ecu ecu = Ecus.getInstance().getByMnemonic(tokens[FRAME_ECU].trim());
+        if (ecu == null) {
+            MainActivity.debug("Ecu does not exist:" + tokens[FRAME_ECU].trim());
+            return;
+        }
+
+        int frameId;
+        int interval;
+        try {
+            frameId = Integer.parseInt(tokens[FRAME_ID].trim(), 16);
+            // every ZOE variant uses the ZOE column; before, only Q210 and R240 did
+            int column = MainActivity.isZOE() ? FRAME_INTERVAL_ZOE : FRAME_INTERVAL_FLUKAN;
+            interval = Integer.parseInt(tokens[column].trim(), 10);
+        } catch (NumberFormatException e) {
+            MainActivity.debug("Frames: malformed line skipped: " + line);
+            return;
+        }
+
+        String k = key(frameId, null);
+        Frame existing = map.get(k);
+        if (existing != null) {
+            existing.setInterval(interval);
+            return;
+        }
+        Frame frame = new Frame(frameId, interval, ecu, null, null);
+        list.add(frame);
+        map.put(k, frame);
+    }
+
+    private void fillFromAsset(String assetName, ArrayList<Frame> list, HashMap<String, Frame> map) {
         AssetLoadHelper assetLoadHelper = new AssetLoadHelper(MainActivity.getInstance());
         BufferedReader bufferedReader = assetLoadHelper.getBufferedReaderFromAsset(assetName);
         if (bufferedReader == null) {
@@ -93,78 +105,97 @@ public class Frames {
         try {
             String line;
             while ((line = bufferedReader.readLine()) != null)
-                fillOneLine(line);
-            bufferedReader.close();
-        }
-        catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-
-    public void load ()
-    {
-        load ("");
-    }
-
-
-    public void load (String assetName)
-    {
-        frames.clear();
-        if (assetName.equals("")) {
-            fillFromAsset("_Frames.csv");
-        } else {
-            fillFromAsset(assetName);
-        }
-    }
-
-    public void load (Ecu ecu)
-    {
-        if (ecu.getFromId() != 0x801) { // for all but the Free Frame ECU, just load it's diagnostic frame. Subframes will be created automatically for each field
-            frames.clear();
-            Frame frame = new Frame(
-                    ecu.getFromId(),
-                    0,
-                    ecu,
-                    null,
-                    null
-            );
-            // add the field to the list of available fields
-            add(frame);
-        } else { // for the FCC, load all Free Frames
-            this.load("FFC_Frames.csv");
-        }
-    }
-
-    public void add(Frame frame) {
-        frames.add(frame);
-    }
-
-    public Frame get (int position) {
-        return frames.get(position);
-    }
-
-    // Lint mark as can be private so probably never used externally
-    public Frame getById (int id) {
-        for(int i=0; i<frames.size(); i++)
-        {
-            Frame frame = frames.get(i);
-            if (frame.getId() == id && frame.getResponseId() == null) return frame;
-        }
-        return null;
-    }
-
-    public Frame getById (int id, String responseId) {
-        for(int i=0; i<frames.size(); i++)
-        {
-            Frame frame = frames.get(i);
-            if (frame.getId() == id && frame.getResponseId() != null) {
-                if (frame.getResponseId().compareTo(responseId) == 0) return frame;
+                fillOneLine(line, list, map);
+        } catch (IOException e) {
+            MainActivity.debug("Frames: could not read " + assetName + ": " + e.getMessage());
+        } finally {
+            try {
+                bufferedReader.close();
+            } catch (IOException ignored) {
             }
         }
-        return null;
     }
 
-    public ArrayList<Frame> getAllFrames () {
-        return frames;
+    private void publish(ArrayList<Frame> list, HashMap<String, Frame> map) {
+        synchronized (lock) {
+            frames = list;
+            byKey = map;
+        }
+    }
+
+    public void load() {
+        load("");
+    }
+
+    public void load(String assetName) {
+        ArrayList<Frame> list = new ArrayList<>();
+        HashMap<String, Frame> map = new HashMap<>();
+        String name = (assetName == null || assetName.isEmpty()) ? "_Frames.csv" : assetName;
+        fillFromAsset(name, list, map);
+        publish(list, map);
+    }
+
+    public void load(Ecu ecu) {
+        if (ecu == null) return;
+        if (ecu.getFromId() == 0x801) {
+            // the Free Frame Computer: load all free frames
+            load("FFC_Frames.csv");
+            return;
+        }
+        // just the diagnostic frame; subframes are created for each field
+        ArrayList<Frame> list = new ArrayList<>();
+        HashMap<String, Frame> map = new HashMap<>();
+        Frame frame = new Frame(ecu.getFromId(), 0, ecu, null, null);
+        list.add(frame);
+        map.put(key(frame.getId(), null), frame);
+        publish(list, map);
+    }
+
+    /** Adds a frame; a different frame with the same id and response id is replaced. */
+    public void add(Frame frame) {
+        if (frame == null) return;
+        String k = key(frame.getId(), frame.getResponseId());
+        synchronized (lock) {
+            Frame existing = byKey.get(k);
+            if (existing == frame) return;
+            if (existing != null) frames.remove(existing);
+            frames.add(frame);
+            byKey.put(k, frame);
+        }
+    }
+
+    /** @return the frame at that position, or null if out of range */
+    public Frame get(int position) {
+        synchronized (lock) {
+            if (position < 0 || position >= frames.size()) return null;
+            return frames.get(position);
+        }
+    }
+
+    public int size() {
+        synchronized (lock) {
+            return frames.size();
+        }
+    }
+
+    /** @return the free frame (no response id) with this id */
+    public Frame getById(int id) {
+        synchronized (lock) {
+            return byKey.get(key(id, null));
+        }
+    }
+
+    public Frame getById(int id, String responseId) {
+        if (responseId == null) return null;
+        synchronized (lock) {
+            return byKey.get(key(id, responseId));
+        }
+    }
+
+    /** @return a snapshot copy, safe to iterate */
+    public ArrayList<Frame> getAllFrames() {
+        synchronized (lock) {
+            return new ArrayList<>(frames);
+        }
     }
 }

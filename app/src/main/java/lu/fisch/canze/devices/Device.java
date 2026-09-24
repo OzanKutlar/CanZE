@@ -22,38 +22,43 @@
 package lu.fisch.canze.devices;
 
 import java.util.ArrayList;
-import java.util.Calendar;
 import java.util.Collections;
-import java.util.Comparator;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import lu.fisch.canze.R;
 import lu.fisch.canze.activities.MainActivity;
-import lu.fisch.canze.classes.Blacklist;
 import lu.fisch.canze.actors.Field;
 import lu.fisch.canze.actors.Fields;
 import lu.fisch.canze.actors.Frame;
 import lu.fisch.canze.actors.Message;
 import lu.fisch.canze.actors.VirtualField;
 import lu.fisch.canze.bluetooth.BluetoothManager;
+import lu.fisch.canze.classes.Blacklist;
 import lu.fisch.canze.database.CanzeDataSource;
 
 /**
- * This class defines an abstract device. It has to manage the device related
- * decoding of the incoming data as well as the data flow to the device or
- * whatever is needed to "talk" to it.
- * <p>
+ * An abstract device: manages the fields to request and the poller thread that requests them.
+ *
+ * Field lists:
+ *  - applicationFields: always polled (e.g. speed for safe driving mode), with their interval
+ *    remembered so it can be restored when a screen that wanted them faster goes away;
+ *  - activityFieldsScheduled: polled when due, for the screen on display;
+ *  - activityFieldsAsFastAsPossible: polled round robin whenever nothing else is due.
+ * All three are guarded by the fields lock.
+ *
  * Created by robertfisch on 07.09.2015.
  */
-
 public abstract class Device {
 
-    public static final int INTERVAL_ASAP = 0; // follows frame rate
+    public static final int INTERVAL_ASAP = 0;      // follows frame rate
     public static final int INTERVAL_ASAPFAST = -1; // truly as fast as possible
-    public static final int INTERVAL_ONCE = -2; // one shot
-
+    public static final int INTERVAL_ONCE = -2;     // one shot
 
     protected static final int TOUGHNESS_HARD = 0;    // hardest reset possible (ie atz)
-    protected static final int TOUGHNESS_MEDIUM = 1;    // medium reset (i.e. atws)
+    protected static final int TOUGHNESS_MEDIUM = 1;  // medium reset (i.e. atws)
     protected static final int TOUGHNESS_SOFT = 2;    // softest reset (i.e atd for ELM)
     protected static final int TOUGHNESS_NONE = 100;  // just clear error status
 
@@ -67,49 +72,36 @@ public abstract class Device {
     private final double minIntervalMultiplicator = 1.3;
     private final double maxIntervalMultiplicator = 2.5;
     double intervalMultiplicator = minIntervalMultiplicator;
-    private volatile boolean deviceIsInitialized = false; // if true initConnection will only start a new pollerthread
+    private volatile boolean deviceIsInitialized = false;
 
-    /* ----------------------------------------------------------------
-     * Attributes
-     \ -------------------------------------------------------------- */
-
-    /**
-     * A device will "monitor" or "request" a given number of fields from
-     * the connected CAN-device, so this is the list of all fields that
-     * have to be read and updated.
-     */
+    /** every field polled for any reason: the union of the three lists below */
     protected final ArrayList<Field> fields = new ArrayList<>();
-    /**
-     * Some fields will be custom, activity based
-     */
-    private ArrayList<Field> activityFieldsScheduled = new ArrayList<>();
-    private ArrayList<Field> activityFieldsAsFastAsPossible = new ArrayList<>();
-    /**
-     * Some other fields will have to be queried anyway,
-     * such as e.g. the speed --> safe mode driving
-     */
-    private ArrayList<Field> applicationFields = new ArrayList<>();
+    private final ArrayList<Field> activityFieldsScheduled = new ArrayList<>();
+    private final ArrayList<Field> activityFieldsAsFastAsPossible = new ArrayList<>();
+    private final ArrayList<Field> applicationFields = new ArrayList<>();
+    /** interval each application field was registered with */
+    private final HashMap<Field, Integer> applicationIntervals = new HashMap<>();
 
     private int activityFieldIndex = 0;
+
+    /**
+     * RIDs (e.g. 7ec.622001) of frames that answered correctly this session. Keyed by RID, not by
+     * CAN id: with the CAN id, one working EVC PID shielded every dead EVC PID from the blacklist.
+     */
+    private final Set<String> provenFrames = Collections.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
 
     private volatile boolean pollerActive = false;
     volatile Thread pollerThread;
     private final Object pollerLock = new Object();
 
-    /**
-     * lastInitProblem should be filled with a descriptive problem description by the initDevice implementation. In normal operation we don't care
-     * because a device either initializes or not, but for testing a new device this can be very helpful.
-     */
+    /** a descriptive problem set by initDevice, mainly useful when testing a new dongle */
     String lastInitProblem = "";
 
     /* ----------------------------------------------------------------
      * Poller lifecycle
      \ -------------------------------------------------------------- */
 
-    /**
-     * A device may need some initialisation before data can be requested.
-     * Starts the poller if the link is up, stops it (bounded) if it is not.
-     */
+    /** Starts the poller if the link is up, stops it (bounded) if it is not. */
     public void initConnection() {
         MainActivity.debug("Device.initConnection: start");
 
@@ -119,11 +111,10 @@ public abstract class Device {
             return;
         }
 
-        MainActivity.debug("Device.initConnection: BT is connected");
         synchronized (pollerLock) {
             Thread current = pollerThread;
             if (current != null && current.isAlive() && isPollerActive()) {
-                // never mind, the BT is active, and the poller thread is running. Nothing to do
+                // the link is up and the poller is running: nothing to do
                 return;
             }
             MainActivity.debug("Device.initConnection: starting new poller");
@@ -160,16 +151,13 @@ public abstract class Device {
         }
     }
 
-    /**
-     * Service loop. Ends as soon as a stop is requested, this thread is interrupted, or a
-     * newer poller has replaced this one.
-     */
+    /** Ends on a stop request, an interrupt, or when a newer poller has replaced this one. */
     private void pollLoop(Thread self) {
         while (isCurrentPoller(self)) {
             if (!hasWork() || !BluetoothManager.getInstance().isConnected()) {
                 if (!sleepPoller(IDLE_SLEEP_MS)) return;
             } else {
-                MainActivity.debug("Device.poller: Doing next query");
+                if (MainActivity.isVerbose()) MainActivity.debug("Device.poller: Doing next query");
                 queryNextFilter();
             }
         }
@@ -178,7 +166,6 @@ public abstract class Device {
     private void handleInitFailure(Thread self) {
         MainActivity.debug("Device.poller: initDevice failed");
         deviceIsInitialized = false;
-        // first check if we have not yet been killed!
         if (!isCurrentPoller(self)) {
             MainActivity.debug("Device.poller: stop was requested, not restarting Bluetooth");
             return;
@@ -186,7 +173,7 @@ public abstract class Device {
         setPollerActive(false);
         MainActivity.debug("Device.poller: restarting Bluetooth");
         BluetoothManager.getInstance().publishConnecting();
-        // drop the BT connexion and try again, serialized with every other stop/reload
+        // drop the link and try again, serialized with every other stop/reload
         MainActivity.restartBluetoothAsync();
     }
 
@@ -195,7 +182,9 @@ public abstract class Device {
     }
 
     private boolean hasWork() {
-        return applicationFields.size() + activityFieldsScheduled.size() + activityFieldsAsFastAsPossible.size() > 0;
+        synchronized (fields) {
+            return applicationFields.size() + activityFieldsScheduled.size() + activityFieldsAsFastAsPossible.size() > 0;
+        }
     }
 
     /** @return false if the sleep was interrupted, i.e. the poller should stop */
@@ -219,6 +208,9 @@ public abstract class Device {
         if (main != null) main.appendDebugMessage(msg);
     }
 
+    /* ----------------------------------------------------------------
+     * Injected requests (poller stopped meanwhile)
+     \ -------------------------------------------------------------- */
 
     public Message injectRequest(String sid) {
         Field field = Fields.getInstance().getBySID(sid);
@@ -226,73 +218,67 @@ public abstract class Device {
         return injectRequest(field.getFrame());
     }
 
-    // stop the poller and request a frame (new!)
+    /** Stops the poller, requests one frame, and always restarts the poller. */
     public Message injectRequest(Frame frame) {
         if (frame == null) return null;
-        // stop the poller and wait for it to become inactive
         stopAndJoin();
-
-        Message message = requestFrame(frame);
-
-        // restart the poller
-        initConnection();
-
-        // return the captured message
-        return message;
+        try {
+            return requestFrame(frame);
+        } finally {
+            initConnection();
+        }
     }
 
-    // stop the poller and request multiple frames (new!)
     public Message injectRequests(Frame[] frames) {
         return injectRequests(frames, false, false);
     }
 
-
-    // stop the poller and request multiple frames (new!)
-    // this variant will be very useful for ie LoadAllData
+    /**
+     * Stops the poller, requests the frames in order, and always restarts the poller (an early
+     * return used to leave it stopped, freezing every screen).
+     *
+     * @return the last message, or null if a frame is missing or stopOnError hit an error
+     */
     public Message injectRequests(Frame[] frames, boolean stopOnError, boolean callOnMessageComplete) {
-        // stop the poller and wait for it to become inactive
+        if (frames == null) return null;
         stopAndJoin();
-
-        Message message = null;
-        for (Frame frame : frames) {
-            message = requestFrame(frame);
-            if (stopOnError && message.isError()) return null;
-            if (callOnMessageComplete) {
-                if (!message.isError()) {
-                    message.onMessageCompleteEvent();
-                } else {
-                    message.onMessageIncompleteEvent();
+        try {
+            Message message = null;
+            for (Frame frame : frames) {
+                if (frame == null) return null;
+                message = requestFrame(frame);
+                if (stopOnError && message.isError()) return null;
+                if (callOnMessageComplete) {
+                    if (!message.isError()) {
+                        message.onMessageCompleteEvent();
+                    } else {
+                        message.onMessageIncompleteEvent();
+                    }
                 }
             }
+            return message;
+        } finally {
+            initConnection();
         }
-
-        // restart the poller
-        initConnection();
-
-        // return the last captured message
-        return message;
     }
 
-    // query the device for the next filter
+    /* ----------------------------------------------------------------
+     * Polling
+     \ -------------------------------------------------------------- */
+
     private void queryNextFilter() {
         if (!hasWork()) return;
         try {
             Field field = getNextField();
-
             if (field == null) {
-                // no next field ---> sleep
                 sleepPoller(NOT_DUE_SLEEP_MS);
                 return;
             }
 
             dropDebug(field.getSID());
-
             final Frame frame = field.getFrame();
 
-            // get the data
             Message message = requestFrame(frame);
-
-            // test if we got something
             if (!message.isError()) {
                 appendDebug("ok");
                 handleFrameSuccess(field, frame, message);
@@ -313,58 +299,35 @@ public abstract class Device {
             }
 
             appendDebug("fail");
-            // failed after single retry. Mark underlying fields as updated to avoid
-            // queue clogging. The frame will have to get back to the end of the queue
+            // mark the fields as updated so the frame goes to the back of the queue
             message.onMessageIncompleteEvent();
 
             if (message.countsAsDeadPid() && blacklistIfDead(frame)) {
-                // The dongle and the bus are demonstrably fine, this PID simply
-                // does not answer on this car. Skipping the re-initialisation
-                // here is the whole point: it is what was starving the values
-                // that do work.
+                // the dongle and bus are fine, this PID just does not answer on this car:
+                // re-initialising here is what used to starve the values that do work
                 return;
             }
 
-            // reset if something went wrong ...
-            // ... but only if we are not asked to stop!
+            // reset, but only if we are not asked to stop
             if (isCurrentPoller(Thread.currentThread()) && BluetoothManager.getInstance().isConnected()) {
                 MainActivity.debug("Device.queryNextFilter: Re-initializing");
-                deviceIsInitialized = false; // force a true device init
-                deviceIsInitialized = initDevice(TOUGHNESS_MEDIUM, 2); // toughness = 1, retries = 2
+                deviceIsInitialized = false;
+                deviceIsInitialized = initDevice(TOUGHNESS_MEDIUM, 2);
             }
-        }
-        // if any error occures, reset the fieldIndex
-        catch (Exception e) {
-            e.printStackTrace();
+        } catch (RuntimeException e) {
+            MainActivity.debug("Device.queryNextFilter: " + e);
         }
     }
 
     private void handleFrameSuccess(Field field, Frame frame, Message message) {
         frame.registerSuccess();
-        provenFrames.add(frame.getId());
-        // trigger the compete event of the message. It will update all fields linked to it's corresponding frame
+        provenFrames.add(frame.getRID());
+        // updates every field of this frame
         message.onMessageCompleteEvent();
         if (field.getInterval() == INTERVAL_ONCE) {
             removeActivityField(field);
         }
     }
-
-    /**
-     * Orders fields by when they are next due.
-     */
-    private static final Comparator<Field> DUE_COMPARATOR = new Comparator<Field>() {
-        @Override
-        public int compare(Field lhs, Field rhs) {
-            return (int) (lhs.getLastRequest() + lhs.getInterval() - (rhs.getLastRequest() + rhs.getInterval()));
-        }
-    };
-
-    /**
-     * Blacklist a frame once it has failed often enough.
-     *
-     * CAN ids that have answered correctly at least once this session.
-     */
-    private final java.util.HashSet<Integer> provenFrames = new java.util.HashSet<>();
 
     /**
      * @param frame the frame that just failed
@@ -373,12 +336,9 @@ public abstract class Device {
     private boolean blacklistIfDead(Frame frame) {
         if (frame == null) return false;
 
-        // A frame that has already answered correctly this session is not an unimplemented PID.
-        // Repeated timeouts on it mean the transport desynced (a stale line being read as the
-        // answer to the next command), and the cure for that is a re-initialisation, not a
-        // permanent blacklist. Blacklisting proven frames here is what used to kill pedal and
-        // torque data for the rest of the session after a single transient ELM error.
-        if (provenFrames.contains(frame.getId())) {
+        // A frame that already answered this session is not an unimplemented PID: repeated
+        // failures mean the transport desynced, which a re-initialisation cures.
+        if (provenFrames.contains(frame.getRID())) {
             frame.registerSuccess();
             MainActivity.debug("Device.blacklistIfDead: refusing to blacklist proven frame " + frame.getRID());
             return false;
@@ -386,14 +346,11 @@ public abstract class Device {
 
         if (frame.registerFailure() < Blacklist.FAILURE_THRESHOLD) return false;
 
-        // Zero the counter. Without this, clearing the blacklist from the settings would
-        // immediately re-blacklist everything on its very next failure, instead of giving
-        // each frame a fresh set of chances.
+        // zero the counter, so clearing the blacklist gives every frame fresh chances
         frame.registerSuccess();
 
         if (!Blacklist.getInstance().add(frame)) {
-            // already on the list, nothing more to announce
-            return true;
+            return true; // already on the list
         }
 
         MainActivity.debug("Device.blacklistIfDead: no longer requesting " + frame.getRID());
@@ -406,58 +363,60 @@ public abstract class Device {
         return true;
     }
 
+    private static long dueTime(Field field) {
+        return field.getLastRequest() + (long) field.getInterval();
+    }
+
     /**
-     * Pick the field that is due first, ignoring blacklisted ones.
-     *
-     * @param candidates    the list to choose from
-     * @param referenceTime now, in milliseconds
-     * @return the field to query, or null if none is pollable or due
+     * The pollable field that is due first, without allocating. Due times are compared as longs:
+     * the old comparator cast the difference to int, which overflowed for fields at
+     * Integer.MAX_VALUE and could let a never due field hide every other one.
      */
     private Field getNextDueField(ArrayList<Field> candidates, long referenceTime) {
-        if (candidates == null || candidates.isEmpty()) return null;
-
-        ArrayList<Field> pollable = new ArrayList<>(candidates.size());
-        for (Field candidate : candidates) {
-            if (candidate != null && !candidate.isSkipped()) {
-                pollable.add(candidate);
+        Field best = null;
+        long bestDue = Long.MAX_VALUE;
+        for (int i = 0; i < candidates.size(); i++) {
+            Field candidate = candidates.get(i);
+            if (candidate == null || candidate.isSkipped()) continue;
+            long due = dueTime(candidate);
+            if (best == null || due < bestDue) {
+                best = candidate;
+                bestDue = due;
             }
         }
-        if (pollable.isEmpty()) return null;
-
-        Field field = Collections.min(pollable, DUE_COMPARATOR);
-        return field.isDue(referenceTime) ? field : null;
+        return best != null && best.isDue(referenceTime) ? best : null;
     }
 
     private Field getNextField() {
-        long referenceTime = Calendar.getInstance().getTimeInMillis();
+        long referenceTime = System.currentTimeMillis();
+        boolean verbose = MainActivity.isVerbose();
 
         synchronized (fields) {
             Field field = getNextDueField(applicationFields, referenceTime);
             if (field != null) {
-                MainActivity.debug("Device.getNextField: applicationFields, " + field.getSID());
+                if (verbose) MainActivity.debug("Device.getNextField: applicationFields, " + field.getSID());
                 return field;
             }
 
-            // take the next costum field
             field = getNextDueField(activityFieldsScheduled, referenceTime);
             if (field != null) {
-                MainActivity.debug("Device.getNextField: activityFieldsScheduled, " + field.getSID());
+                if (verbose) MainActivity.debug("Device.getNextField: activityFieldsScheduled, " + field.getSID());
                 return field;
             }
 
-            // bounded scan: at most one full pass, so an entirely blacklisted list
-            // cannot spin here forever
+            // bounded: at most one full pass, so an entirely blacklisted list cannot spin here
             int candidateCount = activityFieldsAsFastAsPossible.size();
             for (int i = 0; i < candidateCount; i++) {
-                activityFieldIndex = (activityFieldIndex + 1) % activityFieldsAsFastAsPossible.size();
+                activityFieldIndex = (activityFieldIndex + 1) % candidateCount;
                 Field candidate = activityFieldsAsFastAsPossible.get(activityFieldIndex);
                 if (candidate == null || candidate.isSkipped()) continue;
-                MainActivity.debug("Device.getNextField: activityFieldsAsFastAsPossible, " + candidate.getSID());
+                if (verbose) MainActivity.debug("Device.getNextField: activityFieldsAsFastAsPossible, " + candidate.getSID());
                 return candidate;
             }
 
-            MainActivity.debug("Device.getNextField: empty:" + applicationFields.size() + " / " + activityFieldsScheduled.size() + " / " + activityFieldsAsFastAsPossible.size());
-
+            if (verbose) {
+                MainActivity.debug("Device.getNextField: empty:" + applicationFields.size() + " / " + activityFieldsScheduled.size() + " / " + candidateCount);
+            }
             return null;
         }
     }
@@ -468,259 +427,231 @@ public abstract class Device {
             poller.join();
     }
 
-
     /* ----------------------------------------------------------------
-     * Methods (that will be inherited by any "real" device)
+     * Field registration
      \ -------------------------------------------------------------- */
 
     /**
-     * This method clears the list of monitored fields,
-     * but only the custom ones ...
+     * Drops every screen specific field. Fields that were only polled for a screen go back to
+     * "never due", and application fields get their own interval back.
      */
     public void clearFields() {
         MainActivity.debug("Device.clearFields: start");
         synchronized (fields) {
+            releaseActivityIntervals(activityFieldsScheduled);
+            releaseActivityIntervals(activityFieldsAsFastAsPossible);
             activityFieldsScheduled.clear();
             activityFieldsAsFastAsPossible.clear();
             fields.clear();
             fields.addAll(applicationFields);
+            for (Map.Entry<Field, Integer> entry : applicationIntervals.entrySet()) {
+                entry.getKey().setInterval(entry.getValue());
+            }
         }
     }
 
-    /**
-     * A CAN message will trigger updates for all connected fields, meaning
-     * any field with the same ID and the same responseID will be updated.
-     * For this reason we don't need to query these fields multiple times
-     * in one turn.
-     *
-     * @param _field the field to be tested
-     * @return boolean  true if field's frame is already monitored
-     */
-    private boolean containsField(Field _field) {
-        for (int i = 0; i < fields.size(); i++) {
-            Field field = fields.get(i);
-            if (field.getId() == _field.getId() && field.getResponseId().equals(_field.getResponseId()))
-                return true;
+    private void releaseActivityIntervals(ArrayList<Field> list) {
+        for (Field field : list) {
+            if (!applicationIntervals.containsKey(field)) field.setInterval(Integer.MAX_VALUE);
         }
-        return false;
     }
 
-    private boolean containsApplicationField(Field _field) {
-        for (int i = 0; i < applicationFields.size(); i++) {
-            Field field = applicationFields.get(i);
-            if (field.getId() == _field.getId() && field.getResponseId().equals(_field.getResponseId()))
-                return true;
-        }
-        return false;
+    /** One request returns every field of a frame, so fields are compared by frame. */
+    private static boolean sameFrame(Field a, Field b) {
+        return a.getId() == b.getId() && a.getResponseId().equals(b.getResponseId());
     }
 
-    private boolean containsActivityFieldScheduled(Field _field) {
-        for (int i = 0; i < activityFieldsScheduled.size(); i++) {
-            Field field = activityFieldsScheduled.get(i);
-            if (field.getId() == _field.getId() && field.getResponseId().equals(_field.getResponseId()))
-                return true;
+    private static Field findSameFrame(ArrayList<Field> list, Field field) {
+        for (int i = 0; i < list.size(); i++) {
+            Field candidate = list.get(i);
+            if (sameFrame(candidate, field)) return candidate;
         }
-        return false;
+        return null;
     }
 
-    private boolean containsActivityFieldAsFastAsPossible(Field _field) {
-        for (int i = 0; i < activityFieldsAsFastAsPossible.size(); i++) {
-            Field field = activityFieldsAsFastAsPossible.get(i);
-            if (field.getId() == _field.getId() && field.getResponseId().equals(_field.getResponseId()))
-                return true;
-        }
-        return false;
+    private boolean containsField(Field field) {
+        return findSameFrame(fields, field) != null;
     }
 
-    /**
-     * Method to add a field to the list of monitored field.
-     * The field is also immediately registered onto the device.
-     *
-     * @param field the field to be added
-     */
-    private void addActivityField(final Field field) {
-        // ass already present listeners are no being re-registered, do this always
-        // register it to be saved to the database
+    private boolean containsApplicationField(Field field) {
+        return findSameFrame(applicationFields, field) != null;
+    }
+
+    private boolean containsActivityFieldScheduled(Field field) {
+        return findSameFrame(activityFieldsScheduled, field) != null;
+    }
+
+    private boolean containsActivityFieldAsFastAsPossible(Field field) {
+        return findSameFrame(activityFieldsAsFastAsPossible, field) != null;
+    }
+
+    /** Registers a field to be polled flat out (INTERVAL_ASAPFAST). */
+    private void addActivityFieldAsap(final Field field) {
+        // already present listeners are not registered twice
         field.addListener(CanzeDataSource.getInstance());
 
-        if (!field.isVirtual()) {
-
-            synchronized (fields) {
-
-                if (!containsField(field)) {
-                    // add it to the lists
-                    fields.add(field);
-                    activityFieldsAsFastAsPossible.add(field);
-                    // if the scheduled list constains the same frame id,
-                    // it can be removed there
-                    if (containsActivityFieldScheduled(field))
-                        activityFieldsScheduled.remove(field);
-                }
-                if (!containsActivityFieldAsFastAsPossible(field)) {
-                    activityFieldsAsFastAsPossible.add(field);
-                    // if the scheduled list constains the same frame id,
-                    // it can be removed there
-                    if (containsActivityFieldScheduled(field))
-                        activityFieldsScheduled.remove(field);
-                }
+        if (field.isVirtual()) {
+            // poll the real fields a virtual field depends on
+            for (Field realField : ((VirtualField) field).getFields()) {
+                addActivityFieldAsap(realField);
             }
+            return;
         }
-        // register real fields on which a virtual field may depend
-        else {
-            VirtualField virtualField = (VirtualField) field;
-            for (Field realField : virtualField.getFields()) {
-                addActivityField(realField);
+
+        synchronized (fields) {
+            if (!containsField(field)) fields.add(field);
+            if (containsActivityFieldAsFastAsPossible(field)) return;
+            activityFieldsAsFastAsPossible.add(field);
+            // the frame is polled flat out now, scheduled entries for it are redundant
+            for (int i = activityFieldsScheduled.size() - 1; i >= 0; i--) {
+                if (sameFrame(activityFieldsScheduled.get(i), field)) activityFieldsScheduled.remove(i);
             }
         }
     }
 
-    /*
-    JM: I made addActivity without interval private, as to change the behavior with interval 0, which
-    is used throughout the code to mean "we don't care, as fast as possible"
+    /**
+     * interval > 0: every interval ms
+     * INTERVAL_ASAP (0): the frame's own repeat interval (relevant for free frames)
+     * INTERVAL_ASAPFAST (-1): as fast as possible. Use sparingly
+     * INTERVAL_ONCE (-2): once, removed after the first successful answer (e.g. tester present)
      */
-
     public void addActivityField(final Field field, int interval) {
-        /*
-        JM changed behavior
-        interval > 0 is interval
-        interval == INTERVAL_ASAP (0) is frame repeat interval (as given in the frame assets, especially relevant for freeframes)
-        interval == INTERVAL_ASAPFAST (-1) is ASAP (note: old behavior is ASAP for ANYTHING negative, but I am pretty sure only -1
-                was ever used). This should be used sparingly, if at all. The only reason I can think of is for a fast ISO-TP field
-                which has no known interval rate
-        interval == INTERVAL_ONCE) (-2) is add, but remove after one successful execution (in the poller thread). This is very
-                useful for i.e. tester present messages
-        */
-
-        if (interval > INTERVAL_ASAP) { // interval is a ms value. Continue
-            // Nothing
-        } else if (interval == INTERVAL_ASAP) { // if INTERVAL_ASAP, get from the frame definition
-            interval = field.getFrame().getInterval();
-        } else if (interval == INTERVAL_ASAPFAST) { // if INTERVAL_ASAP, add to the ASAP queue
-            addActivityField(field);
-            return;
-        } else if (interval == INTERVAL_ONCE) { // if INTERVAL_ONCE. Continue
-            // Nothing. The INTERVAL_ONCE will be picked up by the poller
-        } else { // abort
+        if (field == null) return;
+        if (interval == INTERVAL_ASAPFAST) {
+            addActivityFieldAsap(field);
             return;
         }
+        if (interval == INTERVAL_ASAP) {
+            Frame frame = field.getFrame();
+            if (frame == null) return;
+            interval = frame.getInterval();
+        } else if (interval < 0 && interval != INTERVAL_ONCE) {
+            return; // unknown code
+        }
 
-        // ass already present listeners are no being re-registered, do this always
-        // register it to be saved to the database
+        // already present listeners are not registered twice
         field.addListener(CanzeDataSource.getInstance());
 
-        if (!field.isVirtual()) {
-            synchronized (fields) {
-
-                if (!containsField(field)) {
-                    // add it to the lists
-                    fields.add(field);
-                    activityFieldsScheduled.add(field);
-                    // set the fields query interval
-                    field.setInterval(interval);
-                }
-                if (!containsActivityFieldScheduled(field)) {
-                    // only add it this field id is not yet on the list of the
-                    // request as fast as possible list.
-                    if (!containsActivityFieldAsFastAsPossible(field))
-                        activityFieldsScheduled.add(field);
-                    // the fields interval will be ignored as the one from the
-                    // applicationFields has priority
-                } else {
-                    // the smallest interval is the one to take
-                    if (interval < field.getInterval())
-                        field.setInterval(interval);
-                }
-            }
-        }
-        // register real fields on which a virtual field may depend
-        else {
+        if (field.isVirtual()) {
             VirtualField virtualField = (VirtualField) field;
+            int count = Math.max(1, virtualField.getFields().size());
+            // spread the dependencies over the interval
+            int realInterval = interval > 0 ? (int) Math.min(Integer.MAX_VALUE, (long) interval * count) : interval;
             for (Field realField : virtualField.getFields()) {
-                // increase interval
-                addActivityField(realField, interval * virtualField.getFields().size());
+                addActivityField(realField, realInterval);
             }
+            return;
         }
+
+        synchronized (fields) {
+            addScheduledLocked(field, interval);
+        }
+    }
+
+    private void addScheduledLocked(Field field, int interval) {
+        if (!containsField(field)) {
+            fields.add(field);
+            activityFieldsScheduled.add(field);
+            field.setInterval(interval);
+            return;
+        }
+        // the frame is already polled
+        if (containsActivityFieldAsFastAsPossible(field)) return; // flat out already
+        if (interval == INTERVAL_ONCE) return; // the next regular poll serves the one shot
+
+        Field scheduled = findSameFrame(activityFieldsScheduled, field);
+        if (scheduled != null) {
+            // the smallest interval wins. It used to be set on the new field, which is not the
+            // one being polled, so asking for a faster rate had no effect. A one shot entry is
+            // upgraded, otherwise its removal would stop the regular polling of the frame.
+            if (scheduled.getInterval() == INTERVAL_ONCE || interval < scheduled.getInterval()) {
+                scheduled.setInterval(interval);
+            }
+            return;
+        }
+
+        // so far only polled for the application (e.g. safe driving speed)
+        activityFieldsScheduled.add(field);
+        field.setInterval(applicationIntervals.containsKey(field) ? Math.min(field.getInterval(), interval) : interval);
     }
 
     public void removeActivityField(final Field field) {
+        if (field == null) return;
         synchronized (fields) {
-            // only remove from the custom fields
-            if (activityFieldsScheduled.remove(field)) {
-                // remove it from the database if it is not on the other list
-                if (!containsApplicationField(field) && !containsActivityFieldAsFastAsPossible(field)) {
-                    fields.remove(field);
-                    field.setInterval(Integer.MAX_VALUE);
-                    // un-register it ...
-                    field.removeListener(CanzeDataSource.getInstance());
-                }
+            if (!activityFieldsScheduled.remove(field)) return;
+            if (containsApplicationField(field) || containsActivityFieldAsFastAsPossible(field)) {
+                // still polled for another reason: give an application field its interval back
+                Integer applicationInterval = applicationIntervals.get(field);
+                if (applicationInterval != null) field.setInterval(applicationInterval);
+                return;
             }
+            fields.remove(field);
+            field.setInterval(Integer.MAX_VALUE);
+            field.removeListener(CanzeDataSource.getInstance());
         }
     }
 
+    /**
+     * Registers a field that is polled regardless of the screen on display. Before, a field whose
+     * frame a screen already polled was silently not registered, and vanished with that screen.
+     */
     public void addApplicationField(final Field field, int interval) {
-        // as already present listeners are not being re-registered, do this always
-        // register it to be saved to the database
+        if (field == null) return;
+        // already present listeners are not registered twice
         field.addListener(CanzeDataSource.getInstance());
 
-        if (!field.isVirtual()) {
-            synchronized (fields) {
-                if (!containsField(field)) {
-                    // set the fields query interval
-                    field.setInterval(interval);
-                    // add it to the two lists
-                    fields.add(field);
-                    applicationFields.add(field);
-                }
-            }
-        }
-        // register real fields on which a virtual field may depend
-        else {
+        if (field.isVirtual()) {
             VirtualField virtualField = (VirtualField) field;
+            int count = Math.max(1, virtualField.getFields().size());
+            int realInterval = (int) Math.min(Integer.MAX_VALUE, (long) interval * count);
             for (Field realField : virtualField.getFields()) {
-                // increase interval
-                addApplicationField(realField, interval * virtualField.getFields().size());
+                addApplicationField(realField, realInterval);
             }
+            return;
         }
 
+        synchronized (fields) {
+            Field representative = findSameFrame(applicationFields, field);
+            if (representative == null) {
+                representative = field;
+                applicationFields.add(field);
+                if (!fields.contains(field)) fields.add(field);
+            }
+            Integer previous = applicationIntervals.get(representative);
+            int merged = previous == null ? interval : Math.min(previous, interval);
+            applicationIntervals.put(representative, merged);
+            boolean alsoForScreen = activityFieldsScheduled.contains(representative)
+                    || activityFieldsAsFastAsPossible.contains(representative);
+            representative.setInterval(alsoForScreen ? Math.min(representative.getInterval(), merged) : merged);
+        }
     }
 
     public void removeApplicationField(final Field field) {
+        if (field == null) return;
         synchronized (fields) {
-            // only remove from the custom fields
-            if (applicationFields.remove(field)) {
-                // remove it from the database if it is not on the other list
-                if (!containsActivityFieldScheduled(field) && !containsActivityFieldAsFastAsPossible(field)) {
-                    fields.remove(field);
-                    field.setInterval(Integer.MAX_VALUE);
-                    // un-register it ...
-                    field.removeListener(CanzeDataSource.getInstance());
-                }
+            applicationIntervals.remove(field);
+            if (!applicationFields.remove(field)) return;
+            if (!containsActivityFieldScheduled(field) && !containsActivityFieldAsFastAsPossible(field)) {
+                fields.remove(field);
+                field.setInterval(Integer.MAX_VALUE);
+                field.removeListener(CanzeDataSource.getInstance());
             }
         }
-
-        // remove depenand fields
-        // ATTENTION; remove the field, despite if it is used by some other VF or not!
-        // may break something, so please do it manually if really needed!
+        // the real fields of a virtual field are not removed: another one may still need them
     }
 
     /* ----------------------------------------------------------------
-     * Methods (that will be inherited by any "real" device)
+     * Link lifecycle
      \ -------------------------------------------------------------- */
 
-
-    /**
-     * Called for every freshly established Bluetooth link.
-     */
+    /** Called for every freshly established Bluetooth link. */
     public void init(boolean reset) {
-        // A new link means the dongle may still be doing whatever it was doing when the
-        // previous link dropped (e.g. streaming ATMA data). Never trust the old init.
+        // the dongle may still be doing whatever it did when the old link dropped
         deviceIsInitialized = false;
 
-        // init the connection
         initConnection();
 
         if (reset) {
-            // clean all filters (just to make sure)
             clearFields();
             MainActivity.debug("Device.init: done, reset");
         } else
@@ -728,8 +659,8 @@ public abstract class Device {
     }
 
     /**
-     * Stop the poller thread and wait (bounded) for it to be finished.
-     * Interrupts the poller so blocking waits inside the device end quickly.
+     * Stops the poller thread and waits (bounded) for it to finish. Interrupts the poller so
+     * blocking waits inside the device end quickly.
      */
     public void stopAndJoin() {
         MainActivity.debug("Device.stopAndJoin: start");
@@ -750,7 +681,6 @@ public abstract class Device {
             return;
         }
 
-        MainActivity.debug("Device.stopAndJoin: poller informed. Joining thread");
         poller.interrupt();
         try {
             poller.join(STOP_JOIN_TIMEOUT_MS);
@@ -759,7 +689,7 @@ public abstract class Device {
             MainActivity.debug("Device.stopAndJoin: interrupted while waiting for the poller");
         }
         if (poller.isAlive()) {
-            // it is no longer the registered poller, so it exits at its next loop check
+            // no longer the registered poller, so it exits at its next loop check
             MainActivity.debug("Device.stopAndJoin: poller did not stop within " + STOP_JOIN_TIMEOUT_MS + " ms, abandoning it");
         }
         clearPollerReference(poller);
@@ -780,55 +710,34 @@ public abstract class Device {
         this.pollerActive = pollerActive;
     }
 
-    /**
-     * Request a field from the device depending on the
-     * type of field.
-     *
-     * @param frame the field to be requested
-     * @return Message  containing the response or an error
-     */
-    public Message requestFrame(Frame frame) {
-        Message msg;
+    /* ----------------------------------------------------------------
+     * Requests
+     \ -------------------------------------------------------------- */
 
-        if (frame.isIsoTp())
-            msg = requestIsoTpFrame(frame);
-        else
-            msg = requestFreeFrame(frame);
+    /** Requests a frame, ISO-TP or free, and adapts the free frame timeout to the outcome. */
+    public Message requestFrame(Frame frame) {
+        Message msg = frame.isIsoTp() ? requestIsoTpFrame(frame) : requestFreeFrame(frame);
 
         if (msg.isError()) {
             MainActivity.debug("Device.requestframe: " + frame.getRID() + " returned error " + msg.getError());
-            // when the answer is empty, the timeout is to low --> increase it!
+            // an empty answer means the timeout is too low: increase it
             if (intervalMultiplicator < maxIntervalMultiplicator) {
                 intervalMultiplicator += 0.1;
-                MainActivity.debug("Device.requestframe: intervalMultiplicator+ = " + intervalMultiplicator);
             }
         } else {
-            MainActivity.debug("Device.requestframe: request for " + frame.getRID() + " returned data " + msg.getData());
-            // theory: when the answer is good, we might recover slowly --> decrease it!
-            // jm: but never below 1 ----> 2015-12-14 changed 10 1.3
+            if (MainActivity.isVerbose()) {
+                MainActivity.debug("Device.requestframe: request for " + frame.getRID() + " returned data " + msg.getData());
+            }
+            // recover slowly after good answers
             if (intervalMultiplicator > minIntervalMultiplicator) {
                 intervalMultiplicator -= 0.01;
-                MainActivity.debug("Device.requestframe: intervalMultiplicator- = " + intervalMultiplicator);
             }
         }
-
         return msg;
     }
 
-    /**
-     * Request a free-frame type field from the device
-     *
-     * @param frame The frame requested
-     * @return Message
-     */
     public abstract Message requestFreeFrame(Frame frame);
 
-    /**
-     * Request an ISO-TP frame type from the device
-     *
-     * @param frame The frame requested
-     * @return Message
-     */
     public abstract Message requestIsoTpFrame(Frame frame);
 
     public abstract boolean initDevice(int toughness);

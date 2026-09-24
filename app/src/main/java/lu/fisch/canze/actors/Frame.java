@@ -21,66 +21,71 @@
 
 package lu.fisch.canze.actors;
 
-import java.util.ArrayList;
-import java.util.Calendar;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import lu.fisch.canze.classes.Blacklist;
 
 /**
  * Frame
+ *
+ * Id and response id never change, so the hex id and the RID are computed once: isSkipped() runs
+ * for every scheduling candidate on every poll and used to format a new string each time. The
+ * field lists are copy on write because the poller iterates them while a reload adds fields.
  */
 public class Frame {
 
-    private int id;
-    private String responseId;
-    private int interval; // in ms
-    private Ecu sendingEcu;
-    private final ArrayList<Field> fields = new ArrayList<>();
-    private final ArrayList<Field> queriedFields = new ArrayList<>();
-    private Frame containingFrame;
+    private final int id;
+    private final String responseId;
+    private final boolean isoTp;
+    private final Ecu sendingEcu;
+    private final Frame containingFrame;
+    private final String hexId;
+    private final String rid;
+    private volatile int interval; // in ms
+
+    private final CopyOnWriteArrayList<Field> fields = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<Field> queriedFields = new CopyOnWriteArrayList<>();
 
     /** number of consecutive failed requests for this frame */
     private int consecutiveFailures = 0;
 
-    protected long lastRequest = 0;
+    protected volatile long lastRequest = 0;
 
-
-    public Frame (int id, int interval, Ecu sendingEcu, String responseId, Frame containingFrame) {
+    public Frame(int id, int interval, Ecu sendingEcu, String responseId, Frame containingFrame) {
         this.id = id;
         this.interval = interval;
         this.sendingEcu = sendingEcu;
         this.responseId = responseId;
         this.containingFrame = containingFrame;
+        String trimmed = responseId == null ? "" : responseId.trim();
+        this.isoTp = !trimmed.isEmpty();
+        this.hexId = String.format(Locale.US, "%03x", id);
+        this.rid = (isoTp ? hexId + "." + trimmed : hexId).toLowerCase(Locale.US);
     }
 
     /* --------------------------------
      * Scheduling
      * ------------------------------ */
 
-    public void updateLastRequest()
-    {
-        lastRequest = Calendar.getInstance().getTimeInMillis();
+    public void updateLastRequest() {
+        lastRequest = System.currentTimeMillis();
     }
 
-    public long getLastRequest()
-    {
+    public long getLastRequest() {
         return lastRequest;
     }
 
-    public boolean isDue(long referenceTime)
-    {
-        return lastRequest+interval<referenceTime;
+    public boolean isDue(long referenceTime) {
+        return lastRequest + interval < referenceTime;
     }
 
     /* --------------------------------
      * Failure tracking
      * ------------------------------ */
 
-    /**
-     * Record one failed request for this frame.
-     *
-     * @return the new number of consecutive failures
-     */
+    /** @return the new number of consecutive failures */
     public synchronized int registerFailure() {
         if (consecutiveFailures < Integer.MAX_VALUE) {
             consecutiveFailures++;
@@ -88,9 +93,7 @@ public class Frame {
         return consecutiveFailures;
     }
 
-    /**
-     * Record a successful request, clearing the failure streak.
-     */
+    /** Record a successful request, clearing the failure streak. */
     public synchronized void registerSuccess() {
         consecutiveFailures = 0;
     }
@@ -99,40 +102,33 @@ public class Frame {
         return consecutiveFailures;
     }
 
-    /**
-     * @return true if this frame has been blacklisted and must not be polled
-     */
+    /** @return true if this frame has been blacklisted and must not be polled */
     public boolean isSkipped() {
-        return Blacklist.getInstance().contains(getRID());
+        return Blacklist.getInstance().contains(rid);
     }
 
     public int getInterval() {
         return interval;
     }
 
-    public void setInterval (int interval) { this.interval = interval; }
+    public void setInterval(int interval) {
+        this.interval = interval;
+    }
 
-    public boolean isIsoTp()
-    {
-        if (this.responseId == null) return false;
-        return !responseId.trim().isEmpty();
+    public boolean isIsoTp() {
+        return isoTp;
     }
 
     public int getId() {
         return id;
     }
 
-    public String getRID()
-    {
-        if(responseId!=null && !responseId.trim().isEmpty())
-            return (getHexId()+"."+responseId.trim()).toLowerCase();
-        else
-            return (getHexId()).toLowerCase();
+    public String getRID() {
+        return rid;
     }
 
-
     public String getHexId() {
-        return String.format("%03x", id);
+        return hexId;
     }
 
     public Ecu getSendingEcu() {
@@ -143,28 +139,28 @@ public class Frame {
         return responseId;
     }
 
-    public ArrayList<Field> getAllFields() {
+    public List<Field> getAllFields() {
         return fields;
     }
 
     public void addField(Field field) {
-        this.fields.add(field);
+        if (field != null) fields.add(field);
     }
 
-    public ArrayList<Field> getQueriedFields() {
+    public List<Field> getQueriedFields() {
         return queriedFields;
     }
 
     public void addQueriedField(Field field) {
-        this.queriedFields.add(field);
+        if (field != null) queriedFields.add(field);
     }
 
     public void removeQueriedField(Field field) {
-        this.queriedFields.remove(field);
+        queriedFields.remove(field);
     }
 
-    public String getRequestId () {
-        if (responseId.compareTo("") == 0) return ("");
+    public String getRequestId() {
+        if (responseId == null || responseId.isEmpty()) return "";
         char[] tmpChars = responseId.toCharArray();
         tmpChars[0] -= 0x04;
         return String.valueOf(tmpChars);
@@ -173,5 +169,4 @@ public class Frame {
     public Frame getContainingFrame() {
         return containingFrame;
     }
-
 }

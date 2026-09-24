@@ -19,27 +19,24 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-
-/*
- * This class represents a CAN frame
- */
 package lu.fisch.canze.actors;
-
 
 import lu.fisch.canze.activities.MainActivity;
 import lu.fisch.canze.classes.FieldLogger;
 
 /**
+ * The answer of a device to a frame request.
+ *
+ * For ISO-TP frames the frame is always a sub frame. On error the data part holds a readable
+ * error text and is never decoded.
+ *
+ * Decoding: the payload is turned into bytes once, and every field reads its bits with shifts
+ * (BitReader) instead of going through a string of '0' and '1' characters. The results are
+ * identical to the old decoder, see BitReaderTest.
  *
  * @author robertfisch
  */
 public class Message {
-
-    // A message represents a message coming from a device as a result from a frame request.
-    // Note that for ISO-TP frames, a frame is always a sub-frame
-    // If an error occurs while fetching a message, the error flag is set to true and the data
-    // part now represents a readable error. The methods ensure that the data part is only
-    // processed when there is no error condition set
 
     /** no error at all */
     public static final int ERROR_NONE = 0;
@@ -55,27 +52,25 @@ public class Message {
     private final boolean error;
     private final int errorKind;
 
-    /**
-     * Backwards compatible constructor. Any error created this way is classified as
-     * ERROR_OTHER and will therefore never cause a frame to be blacklisted.
-     */
+    /** Errors created this way are ERROR_OTHER and never cause a frame to be blacklisted. */
     public Message(Frame frame, String data, boolean error) {
         this(frame, data, error, error ? ERROR_OTHER : ERROR_NONE);
     }
 
     public Message(Frame frame, String data, boolean error, int errorKind) {
-        MainActivity.debug("Message.new.data:" + data);
-        this.frame=frame;
+        if (frame == null) throw new IllegalArgumentException("a message needs a frame");
+        if (MainActivity.isVerbose()) MainActivity.debug("Message.new.data:" + data);
+        this.frame = frame;
         if (frame.isIsoTp() && data != null && data.startsWith("7f")) {
-            // the ECU answered, but refused the request. On a non standard car this is the
-            // strongest possible signal that the PID simply does not exist.
+            // the ECU answered but refused: on a non standard car the strongest possible signal
+            // that the PID simply does not exist
             this.error = true;
             this.errorKind = ERROR_UNSUPPORTED;
             this.data = "-E-Message.isotp.startswith7f";
             return;
         }
-        this.data=data;
-        this.error=error;
+        this.data = data;
+        this.error = error;
         this.errorKind = error ? errorKind : ERROR_NONE;
     }
 
@@ -83,135 +78,97 @@ public class Message {
         return errorKind;
     }
 
-    /**
-     * @return true if this error indicates the PID itself is dead, rather than the
-     *         dongle or the bus being in trouble
-     */
+    /** @return true if this error indicates the PID itself is dead, not the dongle or bus */
     public boolean countsAsDeadPid() {
         return error && (errorKind == ERROR_TIMEOUT || errorKind == ERROR_UNSUPPORTED);
     }
-
-    /* --------------------------------
-     * Getters & setters
-     \ ------------------------------ */
 
     public String getData() {
         return (error || data == null) ? "" : data;
     }
 
-    /* public void setData(String data) {
-        this.data = data;
-    }*/
-
     public Frame getFrame() {
         return frame;
     }
 
-    /* public void setFrame(Frame frame) {
-        this.frame = frame;
-    } */
+    public boolean isError() {
+        return error;
+    }
 
-    public boolean isError () {return error;}
+    public String getError() {
+        return error ? data : "";
+    }
 
-    public String getError () { return error ? data : ""; }
-
-    public void onMessageIncompleteEvent () {
-        // simply update the fields last request date to send them to the end of the queue
+    /** Pushes the frame's fields to the end of the queue without a value. */
+    public void onMessageIncompleteEvent() {
         for (Field field : frame.getAllFields()) {
             field.updateLastRequest();
         }
     }
 
-
+    /**
+     * Updates every field defined for this frame. For an ISO-TP frame getFrame() is a sub frame,
+     * so only the fields with the same response id are touched.
+     */
     public void onMessageCompleteEvent() {
-
-        // If a message frame comes in, simply update all fields that are defined for it.
-        // Note that for an IsoTP field, the getFrame() method returns as sub-frame. The sub-frame's
-        // getAllFields() method only returns the fields with the same responseId.
-
-        // this function is called from DtcActivity ("manual mode") and
-        // Device.queryNextFilter ("auto mode")
-
         if (error) return;
-
-        String binString = getAsBinaryString();
+        byte[] bytes = BitReader.decodeHex(data);
         for (Field field : frame.getAllFields()) {
-            onMessageCompleteEventField(binString, field);
+            decodeField(bytes, field);
         }
     }
 
-    private void onMessageCompleteEventField(String binString, Field field) {
-        if(binString.length()>= field.getTo()) {
-            // parseInt --> signed, so the first bit is "cut-off"!
-            try {
-                binString = binString.substring(field.getFrom(), field.getTo() + 1);
-                if (field.isString()) {
-                    StringBuilder tmpVal = new StringBuilder();
-                    for (int i = 0; i < binString.length(); i += 8) {
-                        tmpVal.append (Character.toString((char) Integer.parseInt("0" + binString.substring(i, i+8), 2)));
-                    }
-                    String val = tmpVal.toString();
-                    field.setValue(val);
-                    // do field logging
-                    if (MainActivity.fieldLogMode)
-                        FieldLogger.getInstance().log(field.getSID() + "," + val);
-
-                } else if (binString.length() <= 4 || binString.contains("0")) {
-                    // experiment with unavailable: any field >= 5 bits whose value contains only 1's
-                    int val;
-
-                    if (field.isSigned() && binString.startsWith("1")) {
-                        // ugly method: flip bits, add a minus in front and subtract one
-                        val = Integer.parseInt("-" + binString.replace('0', 'q').replace('1','0').replace('q','1'), 2) - 1;
-                    } else {
-                        val = Integer.parseInt("0" + binString, 2);
-                    }
-                    //MainActivity.debug("Value of " + field.getHexId() + "." + field.getResponseId() + "." + field.getFrom()+" = "+val);
-                    //MainActivity.debug("Fields: onMessageCompleteEvent > "+field.getSID()+" = "+val);
-
-                    // update the value of the field. This triggers updating all of all listeners of that field
-                    field.setValue(val);
-
-                    // do field logging
-                    if(MainActivity.fieldLogMode)
-                        FieldLogger.getInstance().log(field.getSID()+","+val);
-
-                } else {
-                    field.setValue(Double.NaN);
-                    // do field logging
-                    if(MainActivity.fieldLogMode)
-                        FieldLogger.getInstance().log(field.getSID()+",NaN");
-                }
-                // update the fields last request date
-                field.updateLastRequest();
-
-            } catch (Exception e)
-            {
-                MainActivity.debug("Message.onMessageCompleteEventField: Exception!!");
-                // ignore
+    private void decodeField(byte[] bytes, Field field) {
+        int from = field.getFrom();
+        int to = field.getTo();
+        // like before: a field reaching beyond the payload is left untouched
+        if (!BitReader.fits(bytes, from, to)) return;
+        try {
+            if (field.isString()) {
+                if (!decodeString(bytes, field, from, to)) return;
+            } else if (!decodeNumber(bytes, field, from, to)) {
+                return;
             }
+            field.updateLastRequest();
+        } catch (RuntimeException e) {
+            MainActivity.debug("Message.decodeField: " + field.getSID() + ": " + e);
         }
     }
 
-
-
-    /* --------------------------------
-     * Some utilities
-     \ ------------------------------ */
-
-    private String getAsBinaryString()
-    {
-        StringBuilder result = new StringBuilder();
-        if (!error) {
-            for (int i = 0; i < data.length(); i += 2) {
-                try {
-                    result.append (String.format("%8s", Integer.toBinaryString(Integer.parseInt(data.substring(i, i + 2), 16) & 0xFF)).replace(' ', '0'));
-                } catch (Exception e) {
-                    // do nothing
-                }
-            }
-        }
-        return result.toString();
+    /** @return false if the definition does not describe whole bytes */
+    private boolean decodeString(byte[] bytes, Field field, int from, int to) {
+        if ((to - from + 1) % 8 != 0) return false;
+        String val = BitReader.readString(bytes, from, to);
+        field.setValue(val);
+        logField(field, val);
+        return true;
     }
 
+    /** @return false if the value cannot be represented, in which case the field is not updated */
+    private boolean decodeNumber(byte[] bytes, Field field, int from, int to) {
+        int width = to - from + 1;
+        if (width > BitReader.MAX_WIDTH) {
+            MainActivity.debug("Message: field " + field.getSID() + " is too wide (" + width + " bits)");
+            return false;
+        }
+        long raw = BitReader.read(bytes, from, to);
+        // any field of 5 bits or more with only ones set means: value not available
+        if (width > 4 && BitReader.isAllOnes(raw, width)) {
+            field.setValue(Double.NaN);
+            logField(field, "NaN");
+            return true;
+        }
+        long value = field.isSigned() ? BitReader.signExtend(raw, width) : raw;
+        // values are ints, as they always were
+        if (value > Integer.MAX_VALUE || value < Integer.MIN_VALUE) return false;
+        field.setValue((double) value);
+        logField(field, String.valueOf(value));
+        return true;
+    }
+
+    private static void logField(Field field, String value) {
+        if (MainActivity.fieldLogMode) {
+            FieldLogger.getInstance().log(field.getSID() + "," + value);
+        }
+    }
 }

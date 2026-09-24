@@ -64,6 +64,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 
+import lu.fisch.canze.BuildConfig;
 import lu.fisch.canze.R;
 import lu.fisch.canze.actors.Field;
 import lu.fisch.canze.actors.Fields;
@@ -254,10 +255,16 @@ public class MainActivity extends AppCompatActivity implements FieldListener /*,
 
     public static void debug(String text) {
         Log.d(TAG, text);
-        if (debugLogMode) {
-            SimpleDateFormat sdf = new SimpleDateFormat(getStringSingle(R.string.format_YMDHMSs), Locale.getDefault());
-            DebugLogger.getInstance().log(sdf.format(Calendar.getInstance().getTime()) + ": " + text);
-        }
+        // time stamped and written on the logger's own thread
+        if (debugLogMode) DebugLogger.getInstance().log(text);
+    }
+
+    /**
+     * Whether per-request trace lines are worth building. Hot paths check this before
+     * concatenating strings: always in debug builds, in release only with debug logging on.
+     */
+    public static boolean isVerbose() {
+        return debugLogMode || BuildConfig.DEBUG;
     }
 
     /* TODO we should move to simply always provide the level in the toast() call instead of all those if's in the code */

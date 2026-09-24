@@ -53,10 +53,6 @@ public class BobDue extends Device {
     //private int fieldIndex = 0;
     // the thread that polls the data to the stack
 
-    public void join() throws InterruptedException {
-        pollerThread.join();
-    }
-
     // send a command and wait for an answer
     private String sendAndWaitForAnswer(String command, int waitMillis, int timeout) {
         // empty incoming buffer. This is neccesary to ensure things get not horribly out of sync
@@ -102,10 +98,15 @@ public class BobDue extends Device {
                         }
                     }
                 } else {
-                    //stop = true;
+                    // nothing yet: let the CPU breathe instead of spinning for the whole timeout
+                    Thread.sleep(2);
                 }
             } catch (IOException e) {
                 e.printStackTrace();
+            } catch (InterruptedException e) {
+                // a stop was requested, keep the flag for the poller
+                Thread.currentThread().interrupt();
+                break;
             }
             runtime = Calendar.getInstance().getTimeInMillis() - start;
         }
@@ -140,13 +141,8 @@ public class BobDue extends Device {
             //wrongCount++;
             if (wrongCount > WRONG_THRESHOLD) {
                 wrongCount = 0;
-                (new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        MainActivity.getInstance().stopBluetooth(false);
-                        MainActivity.getInstance().reloadBluetooth(false);
-                    }
-                })).start();
+                // serialized with every other Bluetooth stop/reconnect, safe without a live MainActivity
+                MainActivity.restartBluetoothAsync();
             }
             return new Message(frame, "-E-BobDue.rtm.empty", true);
         }
