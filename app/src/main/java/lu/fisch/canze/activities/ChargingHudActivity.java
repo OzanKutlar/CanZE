@@ -46,10 +46,14 @@ import lu.fisch.canze.widgets.HoldProgressFrame;
  * Fullscreen charging dashboard: state of charge, charging power, and a split bottom band
  * with the session time (left, plus time to full) and the energy added (right).
  *
- * Polling never leaves passive frames:
- *  - SoC (42e.0) is INTERVAL_ASAPFAST, so the ELM stays locked on the 42E filter;
- *  - charging power (42e.56) shares frame 42E and arrives with every SoC packet;
+ * Polling (Fluence Z.E.):
+ *  - SoC (42e.0) is INTERVAL_ASAPFAST on the passive 42E filter;
+ *  - charging power (800.6103.24) is the virtual DC power field also used by ChargingActivity
+ *    (EVC HV voltage x current / 1000), polled every POWER_INTERVAL_MS via ISO-TP;
  *  - plug state (654.2) is polled slowly and time to full (654.32) rides along on 654.
+ *
+ * Energy added is the current power multiplied by the session time, since the Fluence Z.E.
+ * charges at a constant rate.
  *
  * The session lives in ChargeSession and is persisted. It resets automatically when the
  * plug goes from disconnected to connected, and manually by holding the time panel.
@@ -60,10 +64,11 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
     // ------------------------------------------------------------------ polling
 
     private static final String SID_SOC = "42e.0";
-    private static final String SID_POWER = "42e.56";
+    private static final String SID_DC_POWER = "800.6103.24";
     private static final String SID_PLUG = "654.2";
     private static final String SID_TIME_TO_FULL = "654.32";
-    private static final String[] SIBLING_SIDS = {SID_POWER, SID_TIME_TO_FULL};
+    private static final String[] SIBLING_SIDS = {SID_TIME_TO_FULL};
+    private static final int POWER_INTERVAL_MS = 2000;
     private static final int PLUG_INTERVAL_MS = 2000;
     private static final String PREFS_NAME = "lu.fisch.canze.charging_hud";
 
@@ -78,6 +83,7 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
     private static final long[] POW10 = {1L, 10L, 100L, 1000L};
 
     private static final long STALE_NANOS = 3000000000L;
+    private static final long POWER_STALE_NANOS = 6000000000L;
     private static final long REAL_DATA_GRACE_NANOS = 3000000000L;
     private static final long TICK_MS = 50L;
     private static final long SAVE_INTERVAL_MS = 10000L;
@@ -98,7 +104,6 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
     private static final int COLOR_POWER = Color.parseColor("#00E5FF");
     private static final int COLOR_TIME = Color.parseColor("#FFFFFF");
     private static final int COLOR_ENERGY = Color.parseColor("#00E676");
-    private static final int COLOR_ENERGY_ESTIMATED = Color.parseColor("#FFD600");
     private static final int COLOR_STALE = Color.parseColor("#4A5B73");
     private static final int SOC_LOW_HUNDREDTHS = 1500;
     private static final int SOC_MID_HUNDREDTHS = 3000;
@@ -106,13 +111,9 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
     // ------------------------------------------------------------------ demo
 
     private static final double DEMO_START_SOC = 35.0;
-    private static final double DEMO_PEAK_KW = 45.0;
-    private static final double DEMO_MIN_KW = 3.0;
-    private static final double DEMO_RAMP_S = 8.0;
-    private static final double DEMO_TAPER_SOC = 80.0;
-    private static final double DEMO_CAPACITY_KWH = 52.0;
-    private static final double SOC_QUANTUM = 0.02;   // resolution of 42e.0
-    private static final double POWER_QUANTUM = 0.3;  // resolution of 42e.56
+    private static final double DEMO_KW = 3.6;             // Fluence Z.E. AC charging
+    private static final double DEMO_CAPACITY_KWH = 22.0;  // Fluence Z.E. usable capacity
+    private static final double SOC_QUANTUM = 0.02;        // resolution of 42e.0
 
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private final AtomicBoolean renderPending = new AtomicBoolean(false);
@@ -167,16 +168,14 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
     private int shownTtf = NO_VALUE;
     private long shownSeconds = -1L;
     private long shownEnergy = -1L;
-    private boolean shownEstimated;
     private int shownTimeLength;
     private int shownEnergyLength;
     private char decimalSeparator = '.';
     private String socSample = "100.00";
     private String powerSample = "88.8";
-    private String energySample = "~888.888";
+    private String energySample = "888.888";
     private long lastSaveMs;
     private boolean linkErrorReported;
-    private double demoTime;
     private double demoSoc = DEMO_START_SOC;
 
     // ------------------------------------------------------------------ lifecycle
@@ -249,7 +248,7 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
         decimalSeparator = DecimalFormatSymbols.getInstance().getDecimalSeparator();
         socSample = "100" + decimalSeparator + "00";
         powerSample = "88" + decimalSeparator + "8";
-        energySample = "~888" + decimalSeparator + "888";
+        energySample = "888" + decimalSeparator + "888";
     }
 
     private void bindViews() {
@@ -355,11 +354,21 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
     @Override
     protected void initListeners() {
         addField(SID_SOC, Device.INTERVAL_ASAPFAST);
+        addPowerField();
         addField(SID_PLUG, PLUG_INTERVAL_MS);
         attachSiblingListeners();
     }
 
-    /** 42e.56 and 654.32 share frames with polled fields, so they arrive for free. */
+    /** The virtual DC power field only exists when its EVC voltage and current fields do. */
+    private void addPowerField() {
+        if (Fields.getInstance().getBySID(SID_DC_POWER) == null) {
+            appendDebugMessage("Charging HUD: field " + SID_DC_POWER + " not available");
+            return;
+        }
+        addField(SID_DC_POWER, POWER_INTERVAL_MS);
+    }
+
+    /** 654.32 shares frame 654 with the polled plug state, so it arrives for free. */
     private void attachSiblingListeners() {
         synchronized (siblingFields) {
             for (int i = 0; i < SIBLING_SIDS.length; i++) {
@@ -399,11 +408,10 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
         if (SID_SOC.equalsIgnoreCase(sid)) {
             socHundredths = toHundredths(value);
             socUpdatedNanos = nowNanos;
-            session.onSoc(value, nowMs);
-        } else if (SID_POWER.equalsIgnoreCase(sid)) {
+        } else if (SID_DC_POWER.equalsIgnoreCase(sid)) {
             powerTenths = toTenths(value);
             powerUpdatedNanos = nowNanos;
-            session.onPower(value, nowMs);
+            session.onPower(value);
         } else if (SID_PLUG.equalsIgnoreCase(sid)) {
             onPlug(value >= 0.5, nowMs, session);
         } else if (SID_TIME_TO_FULL.equalsIgnoreCase(sid)) {
@@ -478,7 +486,7 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
         ChargeSession session = activeSession();
         if (session != null) {
             renderTime(session, nowMs);
-            renderEnergy(session);
+            renderEnergy(session, nowMs);
         }
         renderTimeToFull();
     }
@@ -489,7 +497,7 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
             shownSoc = value;
             socView.setText(value == NO_VALUE ? getString(R.string.hud_no_value) : formatScaled(value, 2, false));
         }
-        setColorIfChanged(socView, isStale(socUpdatedNanos, nowNanos) ? COLOR_STALE : socColor(value));
+        setColorIfChanged(socView, isStale(socUpdatedNanos, nowNanos, STALE_NANOS) ? COLOR_STALE : socColor(value));
     }
 
     private void renderPower(long nowNanos) {
@@ -498,7 +506,7 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
             shownPower = value;
             powerView.setText(value == NO_VALUE ? getString(R.string.hud_no_value) : formatScaled(value, 1, false));
         }
-        boolean stale = value == NO_VALUE || isStale(powerUpdatedNanos, nowNanos);
+        boolean stale = value == NO_VALUE || isStale(powerUpdatedNanos, nowNanos, POWER_STALE_NANOS);
         setColorIfChanged(powerView, stale ? COLOR_STALE : COLOR_POWER);
     }
 
@@ -516,16 +524,14 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
         }
     }
 
-    private void renderEnergy(ChargeSession session) {
-        long thousandths = Math.round(Math.max(0.0, session.getEnergyKwh()) * 1000.0);
-        boolean estimated = session.isEstimated();
-        if (thousandths == shownEnergy && estimated == shownEstimated) return;
+    private void renderEnergy(ChargeSession session, long nowMs) {
+        long thousandths = Math.round(Math.max(0.0, session.getEnergyKwh(nowMs)) * 1000.0);
+        if (thousandths == shownEnergy) return;
         shownEnergy = thousandths;
-        shownEstimated = estimated;
-        CharSequence text = formatScaled(thousandths, 3, estimated);
+        CharSequence text = formatScaled(thousandths, 3, false);
         int length = text.length();
         energyView.setText(text);
-        setColorIfChanged(energyView, estimated ? COLOR_ENERGY_ESTIMATED : COLOR_ENERGY);
+        setColorIfChanged(energyView, COLOR_ENERGY);
         if (length != shownEnergyLength) {
             shownEnergyLength = length;
             scheduleFit();
@@ -588,8 +594,8 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
         return COLOR_SOC_OK;
     }
 
-    private static boolean isStale(long updatedNanos, long now) {
-        return updatedNanos == 0L || now - updatedNanos > STALE_NANOS;
+    private static boolean isStale(long updatedNanos, long now, long thresholdNanos) {
+        return updatedNanos == 0L || now - updatedNanos > thresholdNanos;
     }
 
     private static void setColorIfChanged(TextView view, int color) {
@@ -611,7 +617,7 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
             if (hasRecentRealData(nowNanos)) {
                 stopDemo(false);
             } else {
-                advanceDemo(TICK_MS / 1000.0, nowNanos, nowMs);
+                advanceDemo(TICK_MS / 1000.0, nowNanos);
             }
         }
         updateDemoControls(nowNanos);
@@ -645,7 +651,6 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
 
     private void startDemo() {
         if (demoActive || hasRecentRealData(System.nanoTime())) return;
-        demoTime = 0.0;
         demoSoc = DEMO_START_SOC;
         demoSession.reset(System.currentTimeMillis());
         demoActive = true;
@@ -663,31 +668,18 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
         powerUpdatedNanos = 0L;
     }
 
-    private void advanceDemo(double dtSeconds, long nowNanos, long nowMs) {
-        demoTime += dtSeconds;
-        double kw = demoPowerAt(demoTime, demoSoc);
+    /** Fluence Z.E. style: constant AC power until full. */
+    private void advanceDemo(double dtSeconds, long nowNanos) {
+        double kw = demoSoc >= 100.0 ? 0.0 : DEMO_KW;
         demoSoc = Math.min(100.0, demoSoc + kw * dtSeconds / 3600.0 / DEMO_CAPACITY_KWH * 100.0);
-        // Quantise like the real 42e.0 / 42e.56 fields so the display behaves as in the car.
+        // Quantise like the real 42e.0 field so the display behaves as in the car.
         double soc = Math.floor(demoSoc / SOC_QUANTUM) * SOC_QUANTUM;
-        double power = Math.round(kw / POWER_QUANTUM) * POWER_QUANTUM;
-        demoSession.onPower(power, nowMs);
-        demoSession.onSoc(soc, nowMs);
+        demoSession.onPower(kw);
         socHundredths = toHundredths(soc);
-        powerTenths = toTenths(power);
+        powerTenths = toTenths(kw);
         ttfMinutes = demoTimeToFull(kw);
         socUpdatedNanos = nowNanos;
         powerUpdatedNanos = nowNanos;
-    }
-
-    /** DC-style curve: ramp up, hold the peak, taper above DEMO_TAPER_SOC. */
-    private static double demoPowerAt(double t, double soc) {
-        if (soc >= 100.0) return 0.0;
-        double ramp = easeInOut(t / DEMO_RAMP_S);
-        double taper = 1.0;
-        if (soc > DEMO_TAPER_SOC) {
-            taper = Math.max(DEMO_MIN_KW / DEMO_PEAK_KW, (100.0 - soc) / (100.0 - DEMO_TAPER_SOC));
-        }
-        return DEMO_PEAK_KW * ramp * taper;
     }
 
     private int demoTimeToFull(double kw) {
@@ -695,10 +687,5 @@ public class ChargingHudActivity extends CanzeActivity implements FieldListener,
         double remainingKwh = (100.0 - demoSoc) / 100.0 * DEMO_CAPACITY_KWH;
         double minutes = Math.ceil(remainingKwh / kw * 60.0);
         return isValidTtf(minutes) ? (int) minutes : NO_VALUE;
-    }
-
-    private static double easeInOut(double x) {
-        double c = Math.max(0.0, Math.min(1.0, x));
-        return c * c * (3.0 - 2.0 * c);
     }
 }

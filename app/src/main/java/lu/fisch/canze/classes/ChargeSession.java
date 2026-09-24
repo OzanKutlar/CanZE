@@ -18,44 +18,37 @@ package lu.fisch.canze.classes;
 import android.content.SharedPreferences;
 
 /**
- * One charging session: start time, energy added and the calibration used to fill gaps.
+ * One charging session: start time and the latest charging power.
  *
- * Energy is the trapezoidal integral of the charging power. Samples further apart than
- * MAX_INTEGRATION_GAP_MS are not integrated; instead, when the SoC resumes after such a
- * gap, the SoC rise over the gap is converted to kWh using the kWh-per-% measured live in
- * this session. Without enough calibration the gap is left out and the value is flagged
- * as estimated.
+ * Energy added is the latest charging power multiplied by the time since the session
+ * started. This assumes the power has been constant since the start of the charge, which
+ * holds for the Fluence Z.E.: it charges at the same rate on any AC source and does not taper.
  *
  * Thread-safe: the poller thread feeds samples while the UI thread reads and saves.
  * A null SharedPreferences gives an in-memory session (used by demo mode).
  */
 public final class ChargeSession {
 
-    private static final long MAX_INTEGRATION_GAP_MS = 5000L;
-    private static final long ESTIMATE_MARK_GAP_MS = 60000L;
-    private static final double MIN_CALIBRATION_SOC = 1.0;
     private static final double MAX_POWER_KW = 400.0;
     private static final double MS_PER_HOUR = 3600000.0;
 
     private static final String KEY_START = "chargeSession.startMs";
-    private static final String KEY_ENERGY = "chargeSession.energyKwh";
-    private static final String KEY_LIVE_KWH = "chargeSession.liveKwh";
-    private static final String KEY_LIVE_SOC = "chargeSession.liveSocRise";
-    private static final String KEY_LAST_SOC = "chargeSession.lastSoc";
-    private static final String KEY_LAST_SOC_MS = "chargeSession.lastSocMs";
-    private static final String KEY_ESTIMATED = "chargeSession.estimated";
+    private static final String KEY_POWER = "chargeSession.powerKw";
+
+    /** Keys written by the previous integrating implementation; removed on save. */
+    private static final String[] OBSOLETE_KEYS = {
+            "chargeSession.energyKwh",
+            "chargeSession.liveKwh",
+            "chargeSession.liveSocRise",
+            "chargeSession.lastSoc",
+            "chargeSession.lastSocMs",
+            "chargeSession.estimated"
+    };
 
     private final SharedPreferences prefs;
 
     private long startMs;
-    private double energyKwh;
-    private double liveKwh;
-    private double liveSocRise;
-    private double lastSoc = Double.NaN;
-    private long lastSocMs;
-    private boolean estimated;
-    private double lastPowerKw;
-    private long lastPowerMs;
+    private double powerKw;
 
     public ChargeSession(SharedPreferences prefs) {
         this.prefs = prefs;
@@ -69,12 +62,7 @@ public final class ChargeSession {
         }
         try {
             startMs = prefs.getLong(KEY_START, nowMs);
-            energyKwh = readDouble(KEY_ENERGY, 0.0);
-            liveKwh = readDouble(KEY_LIVE_KWH, 0.0);
-            liveSocRise = readDouble(KEY_LIVE_SOC, 0.0);
-            lastSoc = readDouble(KEY_LAST_SOC, Double.NaN);
-            lastSocMs = prefs.getLong(KEY_LAST_SOC_MS, 0L);
-            estimated = prefs.getBoolean(KEY_ESTIMATED, false);
+            powerKw = readDouble(KEY_POWER, 0.0);
         } catch (ClassCastException e) {
             // Stored with another type: start over rather than guess.
             reset(nowMs);
@@ -85,105 +73,46 @@ public final class ChargeSession {
 
     private void sanitise(long nowMs) {
         if (startMs <= 0L || startMs > nowMs) startMs = nowMs;
-        if (!isNonNegative(energyKwh)) energyKwh = 0.0;
-        if (!isNonNegative(liveKwh)) liveKwh = 0.0;
-        if (Double.isNaN(liveSocRise) || Double.isInfinite(liveSocRise)) liveSocRise = 0.0;
-        if (!isValidSoc(lastSoc) || lastSocMs <= 0L || lastSocMs > nowMs) {
-            lastSoc = Double.NaN;
-            lastSocMs = 0L;
-        }
+        if (!isValidPower(powerKw)) powerKw = 0.0;
     }
 
     /** Starts a fresh session at nowMs and persists it. */
     public synchronized void reset(long nowMs) {
         startMs = nowMs;
-        energyKwh = 0.0;
-        liveKwh = 0.0;
-        liveSocRise = 0.0;
-        lastSoc = Double.NaN;
-        lastSocMs = 0L;
-        estimated = false;
-        lastPowerKw = 0.0;
-        lastPowerMs = 0L;
+        powerKw = 0.0;
         save();
     }
 
-    /** Integrates one charging power sample in kW. */
-    public synchronized void onPower(double kw, long nowMs) {
+    /** Records the current charging power in kW. */
+    public synchronized void onPower(double kw) {
         if (Double.isNaN(kw) || Double.isInfinite(kw)) return;
-        double clamped = Math.max(0.0, Math.min(MAX_POWER_KW, kw));
-        long dt = nowMs - lastPowerMs;
-        if (lastPowerMs > 0L && dt > 0L && dt <= MAX_INTEGRATION_GAP_MS) {
-            double added = (lastPowerKw + clamped) * 0.5 * dt / MS_PER_HOUR;
-            energyKwh += added;
-            liveKwh += added;
-        }
-        lastPowerKw = clamped;
-        lastPowerMs = nowMs;
-    }
-
-    /** Tracks the SoC for calibration and fills the energy of gaps without power samples. */
-    public synchronized void onSoc(double soc, long nowMs) {
-        if (!isValidSoc(soc)) return;
-        if (lastSocMs > 0L && nowMs > lastSocMs) {
-            long dt = nowMs - lastSocMs;
-            double rise = soc - lastSoc;
-            if (dt > MAX_INTEGRATION_GAP_MS) {
-                fillGap(rise, dt);
-            } else {
-                liveSocRise += rise;
-            }
-        }
-        lastSoc = soc;
-        lastSocMs = nowMs;
-    }
-
-    private void fillGap(double rise, long gapMs) {
-        if (rise <= 0.0) return;
-        if (liveSocRise >= MIN_CALIBRATION_SOC && liveKwh > 0.0) {
-            energyKwh += rise * liveKwh / liveSocRise;
-            if (gapMs > ESTIMATE_MARK_GAP_MS) estimated = true;
-        } else {
-            // Not calibrated yet: the energy of this gap is missing.
-            estimated = true;
-        }
+        powerKw = Math.max(0.0, Math.min(MAX_POWER_KW, kw));
     }
 
     public synchronized long getElapsedMs(long nowMs) {
         return Math.max(0L, nowMs - startMs);
     }
 
-    public synchronized double getEnergyKwh() {
-        return energyKwh;
-    }
-
-    public synchronized boolean isEstimated() {
-        return estimated;
+    /** Current kW multiplied by the hours since the session started. */
+    public synchronized double getEnergyKwh(long nowMs) {
+        return powerKw * getElapsedMs(nowMs) / MS_PER_HOUR;
     }
 
     /** Persists the session; a no-op for in-memory sessions. */
     public synchronized void save() {
         if (prefs == null) return;
-        prefs.edit()
+        SharedPreferences.Editor editor = prefs.edit()
                 .putLong(KEY_START, startMs)
-                .putLong(KEY_ENERGY, Double.doubleToRawLongBits(energyKwh))
-                .putLong(KEY_LIVE_KWH, Double.doubleToRawLongBits(liveKwh))
-                .putLong(KEY_LIVE_SOC, Double.doubleToRawLongBits(liveSocRise))
-                .putLong(KEY_LAST_SOC, Double.doubleToRawLongBits(lastSoc))
-                .putLong(KEY_LAST_SOC_MS, lastSocMs)
-                .putBoolean(KEY_ESTIMATED, estimated)
-                .apply();
+                .putLong(KEY_POWER, Double.doubleToRawLongBits(powerKw));
+        for (String key : OBSOLETE_KEYS) editor.remove(key);
+        editor.apply();
     }
 
     private double readDouble(String key, double fallback) {
         return Double.longBitsToDouble(prefs.getLong(key, Double.doubleToRawLongBits(fallback)));
     }
 
-    private static boolean isNonNegative(double v) {
-        return !Double.isNaN(v) && !Double.isInfinite(v) && v >= 0.0;
-    }
-
-    private static boolean isValidSoc(double v) {
-        return !Double.isNaN(v) && v >= 0.0 && v <= 100.0;
+    private static boolean isValidPower(double v) {
+        return !Double.isNaN(v) && !Double.isInfinite(v) && v >= 0.0 && v <= MAX_POWER_KW;
     }
 }
