@@ -401,9 +401,11 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
     private void handleConnectionState(int state, int attempt) {
         if (reconnectOverlay == null) return;
 
-        if (BluetoothManager.getInstance().isDummyMode()) {
-            cancelPendingReconnectOverlay();
-            setReconnectOverlayVisible(false);
+        final BluetoothManager manager = BluetoothManager.getInstance();
+        // no reconnect UI in dummy mode, nor before the car was ever reached this session
+        // (otherwise it would block the demo modes when no car is around)
+        if (manager.isDummyMode() || !manager.hasEverBeenReady()) {
+            suppressReconnectOverlay();
             return;
         }
 
@@ -427,6 +429,11 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
                 // restart). Leave the overlay as it is; the next state decides.
                 break;
         }
+    }
+
+    private void suppressReconnectOverlay() {
+        cancelPendingReconnectOverlay();
+        setReconnectOverlayVisible(false);
     }
 
     private void scheduleReconnectOverlay() {

@@ -126,6 +126,13 @@ public class BluetoothManager {
     private volatile int connectionAttempt = 0;
     private volatile long lastStopAt = 0;
 
+    /**
+     * true once the dongle reached CONNECTION_READY during this app session. Kept in memory
+     * only on purpose: every launch starts without it, so the reconnect UI never blocks the
+     * demo modes before a real connection has happened. Cleared when the target dongle changes.
+     */
+    private volatile boolean everReady = false;
+
     public boolean isDummyMode() {
         return dummyMode;
     }
@@ -199,6 +206,11 @@ public class BluetoothManager {
         final int gen;
         final Thread staleRetry;
         synchronized (stateLock) {
+            final String previousAddress = connectBluetoothAddress;
+            if (previousAddress != null && !previousAddress.equalsIgnoreCase(bluetoothAddress)) {
+                // a different dongle has not proven itself during this session yet
+                everReady = false;
+            }
             connectBluetoothAddress = bluetoothAddress;
             connectSecure = secure;
             connectRetries = retries;
@@ -530,6 +542,15 @@ public class BluetoothManager {
         return at > 0 && SystemClock.elapsedRealtime() - at < windowMs;
     }
 
+    /**
+     * true if the current dongle reached CONNECTION_READY at least once during this app
+     * session. Before that, connection trouble is not a "lost" connection and must not
+     * trigger the reconnect UI.
+     */
+    public boolean hasEverBeenReady() {
+        return everReady;
+    }
+
     /** called by the device once the dongle answered its initialisation */
     public void publishReady() {
         publishState(CONNECTION_READY, 0);
@@ -549,6 +570,8 @@ public class BluetoothManager {
     }
 
     private void publishState(final int state, final int attempt) {
+        // set before posting, so listeners on the main thread always see the updated flag
+        if (state == CONNECTION_READY) everReady = true;
         connectionState = state;
         connectionAttempt = attempt;
         mainHandler.post(new Runnable() {
