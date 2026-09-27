@@ -206,6 +206,7 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
     @Override
     protected void onDestroy() {
         MainActivity.debug("CanzeActivity: onDestroy");
+        overlayHandler.removeCallbacks(debugRefresh);
         detachReconnectOverlay();
         if (!widgetView) {
             // free the widget listerners
@@ -262,7 +263,8 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
     protected void freeWidgetListeners()
     {
         // free up the listener again
-        ArrayList<WidgetView> widgets = getWidgetViewArrayList((ViewGroup) findViewById(R.id.table));
+        // same root initWidgets() walks; R.id.table does not exist in CanzeActivity layouts
+        ArrayList<WidgetView> widgets = getWidgetViewArrayList((ViewGroup) findViewById(android.R.id.content));
         for(int i=0; i<widgets.size(); i++) {
             WidgetView wv = widgets.get(i);
             String sid = wv.getFieldSID();
@@ -577,24 +579,53 @@ public abstract class CanzeActivity extends AppCompatActivity implements FieldLi
         });
     }
 
-    public void dropDebugMessage (final String msg) {
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                TextView tv = findViewById(R.id.textDebug);
-                if (tv != null) tv.setText(msg);
+    /* ------------- debug line ------------- */
+
+    /** the poller reports several times per poll; a few screen refreshes per second are plenty */
+    private static final long DEBUG_REFRESH_MS = 200;
+    /** keeps a stream of appends without a drop from growing without limit */
+    private static final int DEBUG_MAX_CHARS = 512;
+
+    private final Object debugLock = new Object();
+    private String debugText = "";               // guarded by debugLock
+    private boolean debugRefreshPosted = false;  // guarded by debugLock
+
+    private final Runnable debugRefresh = new Runnable() {
+        @Override
+        public void run() {
+            String text;
+            synchronized (debugLock) {
+                text = debugText;
+                debugRefreshPosted = false;
             }
-        });
+            TextView tv = findViewById(R.id.textDebug);
+            if (tv != null) tv.setText(text);
+        }
+    };
+
+    public void dropDebugMessage (final String msg) {
+        synchronized (debugLock) {
+            debugText = (msg == null) ? "" : msg;
+            scheduleDebugRefreshLocked();
+        }
     }
 
     public void appendDebugMessage (final String msg) {
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                TextView tv = findViewById(R.id.textDebug);
-                if (tv != null) tv.setText(tv.getText() + " " + msg);
-            }
-        });
+        if (msg == null) return;
+        synchronized (debugLock) {
+            String combined = debugText + " " + msg;
+            if (combined.length() > DEBUG_MAX_CHARS)
+                combined = combined.substring(combined.length() - DEBUG_MAX_CHARS);
+            debugText = combined;
+            scheduleDebugRefreshLocked();
+        }
+    }
+
+    /** at most one refresh in flight; it shows whatever text is current when it runs */
+    private void scheduleDebugRefreshLocked() {
+        if (debugRefreshPosted) return;
+        debugRefreshPosted = true;
+        overlayHandler.postDelayed(debugRefresh, DEBUG_REFRESH_MS);
     }
 
     @Override

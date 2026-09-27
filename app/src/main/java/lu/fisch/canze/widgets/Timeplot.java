@@ -21,22 +21,17 @@
 
 package lu.fisch.canze.widgets;
 
-import android.content.res.Resources;
-import android.util.TypedValue;
-
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 
 import java.lang.reflect.Type;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Calendar;
 import java.util.HashMap;
+import java.util.Map;
 
 import lu.fisch.awt.Color;
 import lu.fisch.awt.Graphics;
 import lu.fisch.awt.Polygon;
-import lu.fisch.canze.activities.MainActivity;
 import lu.fisch.canze.actors.Field;
 import lu.fisch.canze.actors.Fields;
 import lu.fisch.canze.classes.TimePoint;
@@ -44,11 +39,56 @@ import lu.fisch.canze.database.CanzeDataSource;
 import lu.fisch.canze.interfaces.DrawSurfaceInterface;
 
 /**
+ * Scrolling time plot of one or more fields.
+ *
+ * Threading: values are written by the poller thread and read by the render thread.
+ * Every access to {@link #values} holds {@link #valuesLock}; drawing works on a
+ * snapshot so the poller is never blocked for the duration of a frame.
+ *
  * @author robertfisch
  */
 public class Timeplot extends Drawable {
 
-    protected HashMap<String, ArrayList<TimePoint>> values = new HashMap<>();
+    private static final long SECOND_MS = 1000L;
+    private static final long MINUTE_MS = 60000L;
+    /** keep a little more than the visible window so the left edge never starts empty */
+    private static final long WINDOW_MARGIN_MS = 2000L;
+
+    private static final int INSET = 6;
+    private static final int PAD_LEFT = 46;
+    private static final int PAD_RIGHT = 16;
+    private static final int PAD_RIGHT_ALT = 46;
+    private static final int PAD_TOP = 38;
+    private static final int PAD_BOTTOM = 26;
+    private static final int GRID_LINES = 3;
+    private static final int BADGE_H = 18;
+
+    private static final Color[] TRACE_COLORS = {
+            new Color(0, 229, 255),   // neon cyan
+            new Color(224, 64, 251),  // neon magenta
+            new Color(0, 230, 118)    // neon green
+    };
+    private static final Color[] AREA_COLORS = {
+            new Color(30, 0, 229, 255),
+            new Color(30, 224, 64, 251),
+            new Color(30, 0, 230, 118)
+    };
+    private static final Color SKIPPED = new Color(204, 0, 0);
+    private static final Color SKIPPED_AREA = new Color(30, 204, 0, 0);
+    private static final Color LEGEND_TEXT = new Color(138, 153, 173);
+    private static final Color PILL_FILL = new Color(24, 33, 49);
+    private static final Color PILL_BORDER = new Color(38, 51, 74);
+    private static final Color GRID = new Color(24, 33, 48);
+    private static final Color AXIS_LABEL = new Color(94, 113, 141);
+    private static final Color BASELINE = new Color(38, 51, 70);
+
+    protected final Object valuesLock = new Object();
+    protected HashMap<String, ArrayList<TimePoint>> values = new HashMap<>(); // guarded by valuesLock
+
+    /** render-thread-only copy of values, reused frame to frame */
+    private final HashMap<String, ArrayList<TimePoint>> drawSnapshot = new HashMap<>();
+    // render-thread-only plot area of the current frame
+    private int plotX, plotY, plotW, plotH;
 
     private boolean backward = true;
 
@@ -61,7 +101,6 @@ public class Timeplot extends Drawable {
         this.y = y;
         this.width = width;
         this.height = height;
-        // test
     }
 
     public Timeplot(DrawSurfaceInterface drawSurface, int x, int y, int width, int height) {
@@ -72,271 +111,327 @@ public class Timeplot extends Drawable {
         this.height = height;
     }
 
+    /* ---------------- data ---------------- */
+
+    private long windowMs() {
+        return MINUTE_MS * Math.max(1, getTimeScale()) + WINDOW_MARGIN_MS;
+    }
+
     public void addValue(String fieldSID, double value) {
-        long iTime = Calendar.getInstance().getTimeInMillis();
-        // with the new dongle, fields may come in too fast, so let's
-        // make sure we do not get an overflow >> very slow app reaction
-        // maximum each second a new value!
-        iTime = (iTime / 1000) * 1000;
+        if (fieldSID == null) return;
+        // at most one point per second: fields can arrive far faster than that
+        long now = (System.currentTimeMillis() / SECOND_MS) * SECOND_MS;
+        TimePoint point = new TimePoint(now, value);
 
-        //MainActivity.debug(values.size()+"");
-        if (!values.containsKey(fieldSID)) values.put(fieldSID, new ArrayList<TimePoint>());
-
-        // don't add every point, but check if for the given second we allready have point
-        // remembering more than on point a second is kind of overkill
-        //values.get(fieldSID).add(new TimePoint(Calendar.getInstance().getTimeInMillis(), value));
-
-        // if empty, add
-        if (values.get(fieldSID).size() == 0)
-            values.get(fieldSID).add(new TimePoint(iTime, value));
-        else {
-            TimePoint lastTP = values.get(fieldSID).get(values.get(fieldSID).size() - 1);
-            // if this is really a new point, add it
-            if (lastTP == null || lastTP.date != iTime)
-                values.get(fieldSID).add(new TimePoint(iTime, value));
-                // if not, replace the previous point
-                // ( database will store the max, but as the value of the last point is also being
-                //   displayed on the screen, we should prefer having the real last point here )
-            else {
-                values.get(fieldSID).set(values.get(fieldSID).size() - 1, new TimePoint(iTime, value));
+        synchronized (valuesLock) {
+            ArrayList<TimePoint> list = values.get(fieldSID);
+            if (list == null) {
+                list = new ArrayList<>();
+                values.put(fieldSID, list);
             }
+            appendOrReplace(list, point);
+            trim(list, now - windowMs());
         }
-
-
-        /*
-        if(value<min) setMin((int) value - 1);
-        else if(value>max) setMax((int) value + 1);
-        */
-
-        /*setMinorTicks(0);
-        setMajorTicks(1);
-        if(getMax()-getMin()>100) setMajorTicks(10);
-        else if(getMax()-getMin()>1000) setMajorTicks(100);
-        else if(getMax()-getMin()>10000) setMajorTicks(1000);
-        /**/
     }
 
-    private Color getColor(int i) {
-        if (i == 0) return new Color(0, 229, 255);    // Neon Cyan #00E5FF
-        else if (i == 1) return new Color(224, 64, 251); // Neon Magenta #E040FB
-        else return new Color(0, 230, 118);            // Neon Green #00E676
+    /** Replaces the last point if it is from the same second (the latest value is the one shown). */
+    private static void appendOrReplace(ArrayList<TimePoint> list, TimePoint point) {
+        int last = list.size() - 1;
+        if (last >= 0) {
+            TimePoint lastPoint = list.get(last);
+            if (lastPoint != null && lastPoint.date == point.date) {
+                list.set(last, point);
+                return;
+            }
+        }
+        list.add(point);
     }
-    @Override
-    public void draw(Graphics g) {
-        // Draw sleek modern card container window
-        drawModernWindowCard(g, 4);
 
-        int inset = 6;
-        int padLeft = 46;
-        int padRight = (minAlt != 0 || maxAlt != 0) ? 46 : 16;
-        int padTop = 38;
-        int padBottom = 26;
-
-        int graphX = x + inset + padLeft;
-        int graphY = y + inset + padTop;
-        int graphW = width - 2 * inset - padLeft - padRight;
-        int graphH = height - 2 * inset - padTop - padBottom;
-
-        if (graphW <= 10 || graphH <= 10) return;
-
-        // Top Header: Title & Trace Legend
-        int titleX = x + inset + 14;
-        int titleY = y + inset + 22;
-        g.setTextSize(11);
-        if (title != null && !title.isEmpty()) {
-            String[] parts = title.replace(" / ", ",").split(",");
-            int curX = titleX;
-            for (int s = 0; s < sids.size(); s++) {
-                Color dotCol = isFieldSkipped() ? new Color(204, 0, 0) : getColor(s);
-                g.setColor(dotCol);
-                g.fillRoundRect(curX, titleY - 8, 8, 8, 4, 4);
-                curX += 12;
-
-                String lbl = (s < parts.length) ? parts[s].trim().toUpperCase() : "DATA";
-                g.setColor(new Color(138, 153, 173));
-                g.drawString(lbl, curX, titleY);
-                curX += g.stringWidth(lbl) + 16;
-            }
+    /** Drops points older than {@code oldest} from the head of a time-ordered list. */
+    private static void trim(ArrayList<TimePoint> list, long oldest) {
+        int size = list.size();
+        int drop = 0;
+        while (drop < size) {
+            TimePoint point = list.get(drop);
+            if (point != null && point.date >= oldest) break;
+            drop++;
         }
+        if (drop > 0) list.subList(0, drop).clear();
+    }
 
-        // Live metric pill badges (top right)
-        int badgeRight = x + width - inset - 14;
-        for (int s = sids.size() - 1; s >= 0; s--) {
-            String sid = sids.get(s);
-            Field f = Fields.getInstance().getBySID(sid);
-            String valStr = "--";
-            if (f != null && !Double.isNaN(f.getValue())) {
-                valStr = String.format("%." + f.getDecimals() + "f %s", f.getValue(), f.getUnit()).trim();
-            } else if (values.containsKey(sid) && !values.get(sid).isEmpty()) {
-                double lastV = values.get(sid).get(values.get(sid).size() - 1).value;
-                if (!Double.isNaN(lastV)) valStr = String.format("%.1f", lastV);
-            }
-            g.setTextSize(11);
-            int strW = g.stringWidth(valStr);
-            int badgeW = strW + 16;
-            int badgeH = 18;
-            int badgeX = badgeRight - badgeW;
-            int badgeY = y + inset + 8;
-
-            // Pill background
-            g.setColor(new Color(24, 33, 49));
-            g.fillRoundRect(badgeX, badgeY, badgeW, badgeH, 9, 9);
-            g.setColor(new Color(38, 51, 74));
-            g.drawRoundRect(badgeX, badgeY, badgeW, badgeH, 9, 9);
-
-            // Text
-            Color valColor = isFieldSkipped() ? new Color(204, 0, 0) : getColor(s);
-            g.setColor(valColor);
-            g.drawString(valStr, badgeX + 8, badgeY + 13);
-            badgeRight = badgeX - 8;
+    private static long lastDate(ArrayList<TimePoint> list) {
+        for (int i = list.size() - 1; i >= 0; i--) {
+            TimePoint point = list.get(i);
+            if (point != null) return point.date;
         }
-
-        // Minimalist horizontal grid lines & Y-axis labels
-        int gridLines = 3;
-        for (int i = 0; i <= gridLines; i++) {
-            float ratio = (float) i / gridLines;
-            int lineY = graphY + (int) (graphH * (1f - ratio));
-            double yVal = min + (max - min) * ratio;
-
-            // Subtle horizontal gridline
-            g.setColor(new Color(24, 33, 48));
-            g.drawLine(graphX, lineY, graphX + graphW, lineY);
-
-            // Label on left
-            g.setColor(new Color(94, 113, 141));
-            g.setTextSize(9);
-            String numStr = String.format("%.0f", yVal);
-            int numW = g.stringWidth(numStr);
-            g.drawString(numStr, graphX - numW - 8, lineY + 3);
-
-            // Alt label on right if exists
-            if (minAlt != 0 || maxAlt != 0) {
-                double altVal = minAlt + (maxAlt - minAlt) * ratio;
-                String altStr = String.format("%.0f", altVal);
-                g.drawString(altStr, graphX + graphW + 8, lineY + 3);
-            }
-        }
-
-        // Draw Data Traces (Smooth curves + translucent area fills)
-        long nowSec = Calendar.getInstance().getTimeInMillis() / 1000;
-        long windowSec = 60L * timeSale;
-        long startSec = nowSec - windowSec;
-
-        for (int s = 0; s < sids.size(); s++) {
-            String sid = sids.get(s);
-            ArrayList<TimePoint> tpList = this.values.get(sid);
-            if (tpList == null || tpList.isEmpty()) continue;
-
-            Color traceColor = isFieldSkipped() ? new Color(204, 0, 0) : getColor(s);
-            double valMin = min;
-            double valMax = max;
-            if (getOptions().getOption(sid) != null && getOptions().getOption(sid).contains("alt")) {
-                valMin = minAlt;
-                valMax = maxAlt;
-            }
-            if (valMax <= valMin) valMax = valMin + 1.0;
-
-            Polygon areaPoly = new Polygon();
-            int prevX = -1;
-            int prevY = -1;
-
-            for (int i = 0; i < tpList.size(); i++) {
-                TimePoint tp = tpList.get(i);
-                if (tp == null || Double.isNaN(tp.value) || tp.date == 0) continue;
-                long tpSec = tp.date / 1000;
-                if (tpSec < startSec) continue;
-
-                float xRatio = (float) (tpSec - startSec) / windowSec;
-                if (xRatio < 0f) xRatio = 0f;
-                if (xRatio > 1f) xRatio = 1f;
-                int curX = graphX + (int) (graphW * xRatio);
-
-                float yRatio = (float) ((tp.value - valMin) / (valMax - valMin));
-                if (yRatio < 0f) yRatio = 0f;
-                if (yRatio > 1f) yRatio = 1f;
-                int curY = graphY + graphH - (int) (graphH * yRatio);
-
-                if (areaPoly.size() == 0) {
-                    areaPoly.addPoint(curX, graphY + graphH);
-                }
-                areaPoly.addPoint(curX, curY);
-
-                // Draw thick glowing connecting line
-                if (prevX >= 0 && prevY >= 0) {
-                    g.setColor(traceColor);
-                    g.setStrokeWidth(2.5f);
-                    g.drawLine(prevX, prevY, curX, curY);
-                }
-                prevX = curX;
-                prevY = curY;
-            }
-
-            // Complete area polygon
-            if (areaPoly.size() > 1 && prevX >= 0) {
-                areaPoly.addPoint(prevX, graphY + graphH);
-                // Translucent fill under trace
-                Color areaCol = new Color(30, traceColor.getRed(), traceColor.getGreen(), traceColor.getBlue());
-                g.setColor(areaCol);
-                g.fillPolygon(areaPoly);
-            }
-            g.setStrokeWidth(1f);
-        }
-
-        // Subtle bottom border baseline
-        g.setColor(new Color(38, 51, 70));
-        g.drawLine(graphX, graphY + graphH, graphX + graphW, graphY + graphH);
+        return Long.MIN_VALUE;
     }
 
     @Override
     public void onFieldUpdateEvent(Field field) {
+        if (field == null) return;
         addValue(field.getSID(), field.getValue());
-
         super.onFieldUpdateEvent(field);
-    }
-
-    @Override
-    public String dataToJson() {
-        Gson gson = new Gson();
-        return gson.toJson(values.clone());
-    }
-
-    @Override
-    public void dataFromJson(String json) {
-        Gson gson = new Gson();
-        Type fooType = new TypeToken<HashMap<String, ArrayList<TimePoint>>>() {
-        }.getType();
-
-        values = gson.fromJson(json, fooType);
     }
 
     @Override
     public void loadValuesFromDatabase() {
         super.loadValuesFromDatabase();
 
-        //values.clear(); // not needed as items will be replaced anyway!
-        for (int s = 0; s < sids.size(); s++) {
-            String sid = sids.get(s);
-            values.put(sid, CanzeDataSource.getInstance().getData(sid));
+        CanzeDataSource dataSource = CanzeDataSource.getInstance();
+        if (dataSource == null) return;
+
+        long oldest = System.currentTimeMillis() - windowMs();
+        ArrayList<String> sidList = new ArrayList<>(sids);
+        for (String sid : sidList) {
+            ArrayList<TimePoint> loaded = dataSource.getData(sid);
+            ArrayList<TimePoint> data = (loaded == null) ? new ArrayList<TimePoint>() : new ArrayList<>(loaded);
+            trim(data, oldest);
+            mergeLoaded(sid, data);
+        }
+    }
+
+    /** Installs history for a SID, keeping live points that arrived while the query ran. */
+    private void mergeLoaded(String sid, ArrayList<TimePoint> data) {
+        synchronized (valuesLock) {
+            ArrayList<TimePoint> live = values.get(sid);
+            if (live != null) {
+                long newest = lastDate(data);
+                for (TimePoint point : live) {
+                    if (point != null && point.date > newest) data.add(point);
+                }
+            }
+            values.put(sid, data);
         }
     }
 
     public void addField(String sid) {
         super.addField(sid);
-        if (!values.containsKey(sid)) {
-            values.put(sid, new ArrayList<TimePoint>());
+        synchronized (valuesLock) {
+            if (!values.containsKey(sid)) {
+                values.put(sid, new ArrayList<TimePoint>());
+            }
         }
     }
 
     public void setValues(HashMap<String, ArrayList<TimePoint>> values) {
-        sids.clear();
-
-        for (String key : values.keySet()) {
-            sids.add(key);
+        if (values == null) return;
+        synchronized (valuesLock) {
+            sids.clear();
+            sids.addAll(values.keySet());
+            this.values = values;
         }
-
-        this.values = values;
     }
 
+    /* ---------------- serialization ---------------- */
+
+    @Override
+    public String dataToJson() {
+        HashMap<String, ArrayList<TimePoint>> copy = new HashMap<>();
+        synchronized (valuesLock) {
+            for (Map.Entry<String, ArrayList<TimePoint>> entry : values.entrySet()) {
+                copy.put(entry.getKey(), new ArrayList<>(entry.getValue()));
+            }
+        }
+        return new Gson().toJson(copy);
+    }
+
+    @Override
+    public void dataFromJson(String json) {
+        if (json == null) return;
+        Type fooType = new TypeToken<HashMap<String, ArrayList<TimePoint>>>() {
+        }.getType();
+        HashMap<String, ArrayList<TimePoint>> parsed = new Gson().fromJson(json, fooType);
+        if (parsed == null) return;
+        synchronized (valuesLock) {
+            values = parsed;
+        }
+    }
+
+    /* ---------------- drawing (render thread) ---------------- */
+
+    private void takeSnapshot() {
+        synchronized (valuesLock) {
+            for (int s = 0; s < sids.size(); s++) {
+                String sid = sids.get(s);
+                ArrayList<TimePoint> target = drawSnapshot.get(sid);
+                if (target == null) {
+                    target = new ArrayList<>();
+                    drawSnapshot.put(sid, target);
+                }
+                target.clear();
+                ArrayList<TimePoint> source = values.get(sid);
+                if (source != null) target.addAll(source);
+            }
+        }
+    }
+
+    private Color traceColor(int index) {
+        if (isFieldSkipped()) return SKIPPED;
+        return TRACE_COLORS[Math.min(index, TRACE_COLORS.length - 1)];
+    }
+
+    private Color areaColor(int index) {
+        if (isFieldSkipped()) return SKIPPED_AREA;
+        return AREA_COLORS[Math.min(index, AREA_COLORS.length - 1)];
+    }
+
+    private static float clamp01(float v) {
+        if (v < 0f) return 0f;
+        if (v > 1f) return 1f;
+        return v;
+    }
+
+    @Override
+    public void draw(Graphics g) {
+        if (g == null) return;
+        drawModernWindowCard(g, 4);
+
+        boolean hasAlt = minAlt != 0 || maxAlt != 0;
+        plotX = x + INSET + PAD_LEFT;
+        plotY = y + INSET + PAD_TOP;
+        plotW = width - 2 * INSET - PAD_LEFT - (hasAlt ? PAD_RIGHT_ALT : PAD_RIGHT);
+        plotH = height - 2 * INSET - PAD_TOP - PAD_BOTTOM;
+        if (plotW <= 10 || plotH <= 10) return;
+
+        takeSnapshot();
+        drawLegend(g);
+        drawBadges(g);
+        drawGrid(g, hasAlt);
+        drawTraces(g);
+
+        g.setColor(BASELINE);
+        g.drawLine(plotX, plotY + plotH, plotX + plotW, plotY + plotH);
+    }
+
+    private void drawLegend(Graphics g) {
+        if (title == null || title.isEmpty()) return;
+        String[] parts = title.replace(" / ", ",").split(",");
+        int curX = x + INSET + 14;
+        int titleY = y + INSET + 22;
+        g.setTextSize(11);
+        for (int s = 0; s < sids.size(); s++) {
+            g.setColor(traceColor(s));
+            g.fillRoundRect(curX, titleY - 8, 8, 8, 4, 4);
+            curX += 12;
+
+            String label = (s < parts.length) ? parts[s].trim().toUpperCase() : "DATA";
+            g.setColor(LEGEND_TEXT);
+            g.drawString(label, curX, titleY);
+            curX += g.stringWidth(label) + 16;
+        }
+    }
+
+    private void drawBadges(Graphics g) {
+        int badgeRight = x + width - INSET - 14;
+        int badgeY = y + INSET + 8;
+        g.setTextSize(11);
+        for (int s = sids.size() - 1; s >= 0; s--) {
+            String text = badgeText(sids.get(s));
+            int badgeW = g.stringWidth(text) + 16;
+            int badgeX = badgeRight - badgeW;
+
+            g.setColor(PILL_FILL);
+            g.fillRoundRect(badgeX, badgeY, badgeW, BADGE_H, 9, 9);
+            g.setColor(PILL_BORDER);
+            g.drawRoundRect(badgeX, badgeY, badgeW, BADGE_H, 9, 9);
+
+            g.setColor(traceColor(s));
+            g.drawString(text, badgeX + 8, badgeY + 13);
+            badgeRight = badgeX - 8;
+        }
+    }
+
+    private String badgeText(String sid) {
+        Field f = Fields.getInstance().getBySID(sid);
+        if (f != null && !Double.isNaN(f.getValue())) {
+            return String.format("%." + f.getDecimals() + "f %s", f.getValue(), f.getUnit()).trim();
+        }
+        ArrayList<TimePoint> points = drawSnapshot.get(sid);
+        if (points != null && !points.isEmpty()) {
+            TimePoint last = points.get(points.size() - 1);
+            if (last != null && !Double.isNaN(last.value)) return String.format("%.1f", last.value);
+        }
+        return "--";
+    }
+
+    private void drawGrid(Graphics g, boolean hasAlt) {
+        g.setTextSize(9);
+        for (int i = 0; i <= GRID_LINES; i++) {
+            float ratio = (float) i / GRID_LINES;
+            int lineY = plotY + (int) (plotH * (1f - ratio));
+
+            g.setColor(GRID);
+            g.drawLine(plotX, lineY, plotX + plotW, lineY);
+
+            g.setColor(AXIS_LABEL);
+            String label = String.format("%.0f", min + (max - min) * (double) ratio);
+            g.drawString(label, plotX - g.stringWidth(label) - 8, lineY + 3);
+
+            if (hasAlt) {
+                String alt = String.format("%.0f", minAlt + (maxAlt - minAlt) * (double) ratio);
+                g.drawString(alt, plotX + plotW + 8, lineY + 3);
+            }
+        }
+    }
+
+    private boolean isAltTrace(String sid) {
+        if (getOptions() == null) return false;
+        String option = getOptions().getOption(sid);
+        return option != null && option.contains("alt");
+    }
+
+    private void drawTraces(Graphics g) {
+        long windowSec = 60L * Math.max(1, getTimeScale());
+        long startSec = System.currentTimeMillis() / SECOND_MS - windowSec;
+
+        for (int s = 0; s < sids.size(); s++) {
+            String sid = sids.get(s);
+            ArrayList<TimePoint> points = drawSnapshot.get(sid);
+            if (points == null || points.isEmpty()) continue;
+
+            boolean alt = isAltTrace(sid);
+            double valMin = alt ? minAlt : min;
+            double valMax = alt ? maxAlt : max;
+            if (valMax <= valMin) valMax = valMin + 1.0;
+
+            drawTrace(g, points, s, startSec, windowSec, valMin, valMax);
+        }
+    }
+
+    private void drawTrace(Graphics g, ArrayList<TimePoint> points, int index,
+                           long startSec, long windowSec, double valMin, double valMax) {
+        int bottom = plotY + plotH;
+        Polygon area = new Polygon();
+        int prevX = -1;
+        int prevY = -1;
+
+        g.setColor(traceColor(index));
+        g.setStrokeWidth(2.5f);
+        for (int i = 0; i < points.size(); i++) {
+            TimePoint tp = points.get(i);
+            if (tp == null || Double.isNaN(tp.value) || tp.date == 0) continue;
+            long tpSec = tp.date / SECOND_MS;
+            if (tpSec < startSec) continue;
+
+            int curX = plotX + (int) (plotW * clamp01((float) (tpSec - startSec) / windowSec));
+            int curY = bottom - (int) (plotH * clamp01((float) ((tp.value - valMin) / (valMax - valMin))));
+
+            if (area.size() == 0) area.addPoint(curX, bottom);
+            area.addPoint(curX, curY);
+
+            if (prevX >= 0) g.drawLine(prevX, prevY, curX, curY);
+            prevX = curX;
+            prevY = curY;
+        }
+
+        if (area.size() > 1 && prevX >= 0) {
+            area.addPoint(prevX, bottom);
+            g.setColor(areaColor(index));
+            g.fillPolygon(area);
+        }
+        g.setStrokeWidth(1f);
+    }
 
     public boolean isBackward() {
         return backward;
@@ -344,22 +439,5 @@ public class Timeplot extends Drawable {
 
     public void setBackward(boolean backward) {
         this.backward = backward;
-    }
-
-    private boolean testErrorPoint(double x, double y, String er) {
-        double maxdelta = 2.0;
-        if (Double.isNaN(x)) {
-            // MainActivity.toast ("x is NaN, " + er);
-            return true;
-        }
-        if (Double.isNaN(y)) {
-            // MainActivity.toast ("y is NaN, " + er);
-            return true;
-        }
-        if (x >= -maxdelta && x <= maxdelta && y >= -maxdelta && y <= maxdelta) {
-            // MainActivity.toast ("x:" + x + ", y:" + y + ", " + er);
-            return true;
-        } else
-            return false;
     }
 }

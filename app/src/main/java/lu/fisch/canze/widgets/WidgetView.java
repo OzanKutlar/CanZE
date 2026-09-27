@@ -27,38 +27,39 @@ import android.content.res.TypedArray;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.PaintFlagsDrawFilter;
-import android.graphics.Point;
 import android.os.Handler;
-import android.os.Message;
+import android.os.HandlerThread;
+import android.os.Process;
 import android.util.AttributeSet;
-import android.view.Display;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
-import android.view.WindowManager;
 
 import java.lang.reflect.Constructor;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import lu.fisch.awt.Color;
 import lu.fisch.awt.Graphics;
+import lu.fisch.canze.R;
 import lu.fisch.canze.activities.CanzeActivity;
+import lu.fisch.canze.activities.MainActivity;
+import lu.fisch.canze.activities.WidgetActivity;
 import lu.fisch.canze.actors.Field;
 import lu.fisch.canze.classes.ColorRanges;
 import lu.fisch.canze.classes.Intervals;
 import lu.fisch.canze.classes.Options;
 import lu.fisch.canze.interfaces.DrawSurfaceInterface;
-import lu.fisch.canze.activities.MainActivity;
-import lu.fisch.canze.R;
-import lu.fisch.canze.activities.WidgetActivity;
 
 public class WidgetView extends SurfaceView implements DrawSurfaceInterface, SurfaceHolder.Callback, View.OnTouchListener {
 
-	// a reference to the drawing thread
-	private DrawThread drawThread = null;
+    /** how long surfaceDestroyed waits for an in-flight frame before giving up */
+    private static final long RENDER_STOP_TIMEOUT_MS = 500;
+    /** same white clear the old DrawThread did before every frame */
+    private static final int CLEAR_COLOR = 0xFFFFFFFF;
 
-	// your application certainly needs some data model
-	private Drawable drawable = null;
+    // your application certainly needs some data model
+    private Drawable drawable = null;
     private String fieldSID = "";
 
     private boolean clickable = true;
@@ -67,52 +68,86 @@ public class WidgetView extends SurfaceView implements DrawSurfaceInterface, Sur
 
     private CanzeActivity canzeActivity = null;
 
-
-
     // for data sharing
     public static Drawable selectedDrawable = null;
 
-	public void setDrawable(Drawable drawable)
+    /* ---- rendering: one looper thread per surface, alive from surfaceCreated to surfaceDestroyed ---- */
+
+    private final Object renderLock = new Object();
+    private HandlerThread renderThread = null; // guarded by renderLock
+    private Handler renderHandler = null;      // guarded by renderLock
+    /** true while a frame is posted but has not started yet; further repaints fold into it */
+    private final AtomicBoolean renderQueued = new AtomicBoolean(false);
+    private volatile boolean surfaceReady = false;
+
+    // only ever touched on the render thread
+    private final Paint clearPaint = new Paint();
+    private final PaintFlagsDrawFilter drawFilter = new PaintFlagsDrawFilter(1, Paint.ANTI_ALIAS_FLAG);
+    private final Graphics graphics = new Graphics(null);
+
     {
-        this.drawable=drawable;
-        //if(drawable.getDrawSurface()==null)
+        clearPaint.setColor(CLEAR_COLOR);
+    }
+
+    private final Runnable renderTask = new Runnable() {
+        @Override
+        public void run() {
+            // clear first: an update arriving while we draw must queue another frame
+            renderQueued.set(false);
+            renderFrame();
+        }
+    };
+
+    private final Runnable loadTask = new Runnable() {
+        @Override
+        public void run() {
+            loadFromDatabase();
+            renderFrame();
+        }
+    };
+
+    public void setDrawable(Drawable drawable)
+    {
+        if (drawable == null) return;
+        this.drawable = drawable;
         drawable.setDrawSurface(this);
         repaint();
     }
 
-	public Drawable getDrawable()
-	{
-		return drawable;
-	}
+    public Drawable getDrawable()
+    {
+        return drawable;
+    }
 
-	public WidgetView(Context context) {
-		super(context);
-		init(context, null);
+    public WidgetView(Context context) {
+        super(context);
+        init(context, null);
         setOnTouchListener(this);
-	}
+    }
 
-	public WidgetView(Context context, AttributeSet attrs) {
-		super(context, attrs);
-		init(context, attrs);
+    public WidgetView(Context context, AttributeSet attrs) {
+        super(context, attrs);
+        init(context, attrs);
         setOnTouchListener(this);
-	}
+    }
 
-	public WidgetView(Context context, AttributeSet attrs, int defStyle) {
-		super(context, attrs, defStyle);
-		init(context, attrs);
+    public WidgetView(Context context, AttributeSet attrs, int defStyle) {
+        super(context, attrs, defStyle);
+        init(context, attrs);
         setOnTouchListener(this);
-	}
+    }
 
     @Override
     protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
         super.onLayout(changed, left, top, right, bottom);
 
-        landscape = (right-left)>(bottom-top);
-        if(changed) drawable.onLayout(landscape);
+        landscape = (right - left) > (bottom - top);
+        if (changed && drawable != null) drawable.onLayout(landscape);
     }
 
     public void reset()
     {
+        if (drawable == null) return;
         drawable.reset();
         repaint();
     }
@@ -122,101 +157,87 @@ public class WidgetView extends SurfaceView implements DrawSurfaceInterface, Sur
         // the first value is the default one
         String carValue = values[0];
 
-        for(int i=1; i<values.length; i++)
-            if(values[i].startsWith(String.valueOf(MainActivity.car)+":"))
-                carValue=values[i].split(":")[1];
+        for (int i = 1; i < values.length; i++)
+            if (values[i].startsWith(String.valueOf(MainActivity.car) + ":"))
+                carValue = values[i].split(":")[1];
 
         return carValue;
     }
 
     public void init(final Context context, AttributeSet attrs)
-	{
+    {
         // register our interest in hearing about changes to our surface
         SurfaceHolder holder = getHolder();
         holder.addCallback(this);
         // make sure we get key events
         setFocusable(true);
 
-    	WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
-    	Display display = wm.getDefaultDisplay();
-    	Point size = new Point();
-    	display.getSize(size);
-
         // read attributes
-        if(attrs!=null)
+        if (attrs != null)
         {
             try
             {
                 // create configured widget
-                String[] widgets = {"Tacho","Kompass", "Bar","BatteryBar","Plotter","Label","Timeplot","BarGraph"};
+                String[] widgets = {"Tacho", "Kompass", "Bar", "BatteryBar", "Plotter", "Label", "Timeplot", "BarGraph"};
                 TypedArray attributes = context.getTheme().obtainStyledAttributes(attrs, R.styleable.WidgetView, 0, 0);
                 int widgetIndex = attributes.getInt(R.styleable.WidgetView_widget, 0);
-                if(widgetIndex<widgets.length)
+                if (widgetIndex < widgets.length)
                 {
                     String widget = widgets[widgetIndex];
-                    //MainActivity.debug("WidgetView: I am a "+widget);
                     Class clazz = Class.forName("lu.fisch.canze.widgets." + widget);
-                    //Constructor<?> constructor = clazz.getConstructor(null);
                     Constructor<?> constructor = clazz.getConstructor();
                     drawable = (Drawable) constructor.newInstance();
                     drawable.setDrawSurface(WidgetView.this);
                     // apply attributes
                     drawable.setMin(Integer.valueOf(extractCarValue(attributes.getString(R.styleable.WidgetView_min).split(","))));
                     drawable.setMax(Integer.valueOf(extractCarValue(attributes.getString(R.styleable.WidgetView_max).split(","))));
-                    //drawable.setMin(attributes.getInt(R.styleable.WidgetView_min, 0));
-                    //drawable.setMax(attributes.getInt(R.styleable.WidgetView_max, 0));
                     drawable.setMajorTicks(Integer.valueOf(extractCarValue(attributes.getString(R.styleable.WidgetView_majorTicks).split(","))));
                     drawable.setMinorTicks(Integer.valueOf(extractCarValue(attributes.getString(R.styleable.WidgetView_minorTicks).split(","))));
-                    //drawable.setMajorTicks(attributes.getInt(R.styleable.WidgetView_majorTicks, 0));
-                    //drawable.setMinorTicks(attributes.getInt(R.styleable.WidgetView_minorTicks, 0));
                     drawable.setTitle(attributes.getString(R.styleable.WidgetView_text));
                     drawable.setShowLabels(attributes.getBoolean(R.styleable.WidgetView_showLabels, true));
                     drawable.setShowValue(attributes.getBoolean(R.styleable.WidgetView_showValue, true));
                     drawable.setInverted(attributes.getBoolean(R.styleable.WidgetView_isInverted, false));
 
-                    String colorRangesJson =attributes.getString(R.styleable.WidgetView_colorRanges);
-                    if(colorRangesJson!=null && !colorRangesJson.trim().isEmpty())
+                    String colorRangesJson = attributes.getString(R.styleable.WidgetView_colorRanges);
+                    if (colorRangesJson != null && !colorRangesJson.trim().isEmpty())
                         drawable.setColorRanges(new ColorRanges(colorRangesJson.replace("'", "\"")));
 
-                    String foreground =attributes.getString(R.styleable.WidgetView_foregroundColor);
-                    if(foreground!=null && !foreground.isEmpty())
+                    String foreground = attributes.getString(R.styleable.WidgetView_foregroundColor);
+                    if (foreground != null && !foreground.isEmpty())
                         drawable.setForeground(Color.decode(foreground));
 
-                    String background =attributes.getString(R.styleable.WidgetView_backgroundColor);
-                    if(background!=null && !background.isEmpty())
+                    String background = attributes.getString(R.styleable.WidgetView_backgroundColor);
+                    if (background != null && !background.isEmpty())
                         drawable.setBackground(Color.decode(background));
 
-                    String intermediate =attributes.getString(R.styleable.WidgetView_intermediateColor);
-                    if(intermediate!=null && !intermediate.isEmpty())
+                    String intermediate = attributes.getString(R.styleable.WidgetView_intermediateColor);
+                    if (intermediate != null && !intermediate.isEmpty())
                         drawable.setIntermediate(Color.decode(intermediate));
 
-                    String titleColor =attributes.getString(R.styleable.WidgetView_titleColor);
-                    if(titleColor!=null && !titleColor.isEmpty())
+                    String titleColor = attributes.getString(R.styleable.WidgetView_titleColor);
+                    if (titleColor != null && !titleColor.isEmpty())
                         drawable.setTitleColor(Color.decode(titleColor));
 
-                    String intervalJson =attributes.getString(R.styleable.WidgetView_intervals);
-                    if(intervalJson!=null && !intervalJson.trim().isEmpty())
+                    String intervalJson = attributes.getString(R.styleable.WidgetView_intervals);
+                    if (intervalJson != null && !intervalJson.trim().isEmpty())
                         drawable.setIntervals(new Intervals(intervalJson.replace("'", "\"")));
 
-                    String optionsJson =attributes.getString(R.styleable.WidgetView_options);
-                    if(optionsJson!=null && !optionsJson.trim().isEmpty())
+                    String optionsJson = attributes.getString(R.styleable.WidgetView_options);
+                    if (optionsJson != null && !optionsJson.trim().isEmpty())
                         drawable.setOptions(new Options(optionsJson.replace("'", "\"")));
 
-                    //drawable.setMinAlt(attributes.getInt(R.styleable.WidgetView_minAlt, -1));
-                    //drawable.setMaxAlt(attributes.getInt(R.styleable.WidgetView_maxAlt, -1));
-
                     String minAlt = attributes.getString(R.styleable.WidgetView_minAlt);
-                    if(minAlt!=null && !minAlt.trim().isEmpty())
+                    if (minAlt != null && !minAlt.trim().isEmpty())
                         drawable.setMinAlt(Integer.valueOf(extractCarValue(minAlt.split(","))));
 
                     String maxAlt = attributes.getString(R.styleable.WidgetView_maxAlt);
-                    if(maxAlt!=null && !maxAlt.trim().isEmpty())
+                    if (maxAlt != null && !maxAlt.trim().isEmpty())
                         drawable.setMaxAlt(Integer.valueOf(extractCarValue(maxAlt.split(","))));
 
-                    drawable.setTimeScale(attributes.getInt(R.styleable.WidgetView_timeScale,1));
+                    drawable.setTimeScale(attributes.getInt(R.styleable.WidgetView_timeScale, 1));
 
                     fieldSID = attributes.getString(R.styleable.WidgetView_fieldSID);
-                    if(fieldSID!=null) {
+                    if (fieldSID != null) {
                         String[] sids = fieldSID.split(",");
                         for (int s = 0; s < sids.length; s++) {
                             Field field = MainActivity.fields.getBySID(sids[s]);
@@ -228,208 +249,194 @@ public class WidgetView extends SurfaceView implements DrawSurfaceInterface, Sur
                                 // add listener
                                 field.addListener(drawable);
                                 // add filter to reader
-                                int interval = drawable.getIntervals().getInterval(field.getSID());
-                                if (interval == -1)
-                                    MainActivity.device.addActivityField(field, 0); // JM added 0, see that method for rationale
-                                else
-                                    MainActivity.device.addActivityField(field, interval);
+                                if (MainActivity.device != null) {
+                                    int interval = drawable.getIntervals().getInterval(field.getSID());
+                                    if (interval == -1)
+                                        MainActivity.device.addActivityField(field, 0); // JM added 0, see that method for rationale
+                                    else
+                                        MainActivity.device.addActivityField(field, interval);
+                                }
                             }
                         }
                     }
-                    //MainActivity.debug("WidgetView: My SID is "+fieldSID);
 
-                    if(MainActivity.milesMode) drawable.setTitle(drawable.getTitle().replace("km","mi"));
+                    if (MainActivity.milesMode) drawable.setTitle(drawable.getTitle().replace("km", "mi"));
                 }
                 else
                 {
                     MainActivity.debug("WidgetView: init: WidgetIndex " + widgetIndex + " is wrong!? Not registered in <WidgetView>?");
                 }
             }
-            catch(Exception e)
+            catch (Exception e)
             {
+                MainActivity.debug("WidgetView: init failed: " + e);
                 e.printStackTrace();
             }
         }
+    }
 
-        // in case your application needs one or more timers,
-        // you have to put them here
-        /*Timer timer = new Timer();
-        timer.schedule(new TimerTask() {
-			@Override
-			public void run() {
-				repaint();
-			}
-		}, 100, 100);
-		*/
-	}
-
-    private boolean motionDown = false;
     private boolean motionMove = false;
     private float downX, downY;
 
     @Override
     public boolean onTouch(View v, MotionEvent event)
     {
-		// react on touch events
-		// get pointer index from the event object
-	    int pointerIndex = event.getActionIndex();
+        int maskedAction = event.getActionMasked();
 
-	    // get pointer ID
-	    int pointerId = event.getPointerId(pointerIndex);
-
-	    // get masked (not specific to a pointer) action
-	    int maskedAction = event.getActionMasked();
-
-        MainActivity.debug("WidgetView: maskedAction = " + maskedAction);
-
-	    switch (maskedAction) {
-		    case MotionEvent.ACTION_DOWN:
-		    case MotionEvent.ACTION_POINTER_DOWN:{
-                motionDown=true;
-                downX=event.getX();
-                downY=event.getY();
+        switch (maskedAction) {
+            case MotionEvent.ACTION_DOWN:
+            case MotionEvent.ACTION_POINTER_DOWN: {
+                downX = event.getX();
+                downY = event.getY();
                 break;
             }
-		    case MotionEvent.ACTION_MOVE: {
+            case MotionEvent.ACTION_MOVE: {
                 if (Math.abs(downX - event.getX()) + Math.abs(downY - event.getY()) > 20) {
-                    motionMove=true;
+                    motionMove = true;
                 }
-
-			    break;
-		    }
-
-		    case MotionEvent.ACTION_UP:
-		    case MotionEvent.ACTION_POINTER_UP:
-            {
-                if(!motionMove && clickable && MainActivity.isSafe()) {
-                    canzeActivity.setWidgetClicked(true);
+                break;
+            }
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_POINTER_UP: {
+                if (!motionMove && clickable && MainActivity.isSafe()) {
+                    if (canzeActivity != null) canzeActivity.setWidgetClicked(true);
                     Intent intent = new Intent(this.getContext(), WidgetActivity.class);
                     selectedDrawable = this.getDrawable();
                     this.getContext().startActivity(intent);
                 }
-
-                motionDown=false;
-                motionMove=false;
+                motionMove = false;
                 break;
             }
-		    case MotionEvent.ACTION_CANCEL: {
+            default:
+                break;
+        }
 
-		    	break;
-		    }
-	    }
-
-
-	    invalidate();
-
-	    return true;
+        return true;
     }
 
-	@Override
-	public void surfaceChanged(SurfaceHolder arg0, int arg1, int arg2, int arg3) {
+    /* ---------------- surface lifecycle ---------------- */
 
-	}
+    @Override
+    public void surfaceCreated(SurfaceHolder holder)
+    {
+        surfaceReady = true;
+        startRenderThread();
+        // restore history on the render thread, then draw it
+        postRender(loadTask);
+    }
 
-	@Override
-	public void surfaceCreated(SurfaceHolder arg0)
-	{
-        // load data from the database
-        (new Thread(new Runnable() {
-            @Override
-            public void run() {
-                drawable.loadValuesFromDatabase();
-                repaint();
-            }
-        })).start();
-	}
+    @Override
+    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+        repaint();
+    }
 
-    // DIRECT repaint method
-    public void repaint2() {
-        Canvas c = null;
+    @Override
+    public void surfaceDestroyed(SurfaceHolder holder)
+    {
+        // no frame may be drawn once this returns
+        surfaceReady = false;
+        stopRenderThread();
+    }
+
+    private void startRenderThread() {
+        synchronized (renderLock) {
+            if (renderThread != null) return;
+            HandlerThread thread = new HandlerThread("WidgetRender", Process.THREAD_PRIORITY_DISPLAY);
+            thread.start();
+            renderThread = thread;
+            renderHandler = new Handler(thread.getLooper());
+        }
+    }
+
+    private void stopRenderThread() {
+        HandlerThread thread;
+        synchronized (renderLock) {
+            thread = renderThread;
+            if (renderHandler != null) renderHandler.removeCallbacksAndMessages(null);
+            renderThread = null;
+            renderHandler = null;
+        }
+        renderQueued.set(false);
+        if (thread == null) return;
+
+        thread.quit();
         try {
-            c = getHolder().lockCanvas();
-            if (c != null) {
-                // enable anti-aliasing
-                c.setDrawFilter(new PaintFlagsDrawFilter(1, Paint.ANTI_ALIAS_FLAG));
-                // clean background
-                Paint paint = new Paint();
-                paint.setColor(drawable.getBackground().getAndroidColor());
-                c.drawRect(0, 0, c.getWidth(), c.getHeight(), paint);
-                // set dimensions
-                drawable.setWidth(getWidth());
-                drawable.setHeight(getHeight());
-                // do the drawing
-                drawable.draw(new Graphics(c));
-            }
+            thread.join(RENDER_STOP_TIMEOUT_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
-        catch(Exception e)
-        {
-            // ignore
-        }
-        finally
-        {
-            if (c != null) {
-                getHolder().unlockCanvasAndPost(c);
-            }
+        if (thread.isAlive())
+            MainActivity.debug("WidgetView: render thread still busy after " + RENDER_STOP_TIMEOUT_MS + " ms");
+    }
+
+    private boolean postRender(Runnable task) {
+        synchronized (renderLock) {
+            return renderHandler != null && renderHandler.post(task);
         }
     }
 
-    // INDIRECT repaint method (using a separate thread
-	public void repaint()
-	{
-        if(drawThread==null || !drawThread.isRunning())
-        {
-            // gargabe collect
-            System.gc();
-            // post a task to the UI thread
-            this.post(new Runnable() {
-                @Override
-                public void run() {
-                    // create a new drawThread
-                    drawThread = new DrawThread(getHolder(), getContext(), new Handler() {
-                        @Override
-                        public void handleMessage(Message m) {
-                        }
-                    });
-                    // call the setter for the pointer to the model
-                    if (drawable != null) {
-                        drawable.setWidth(getWidth());
-                        drawable.setHeight(getHeight());
-                        // draw the widget
-                        drawThread.setDrawable(drawable);
-                    }
-                    // start the thread
-                    drawThread.start();
-                }
-            });
-        }
-	}
+    /* ---------------- rendering ---------------- */
 
-	@Override
-	public void surfaceDestroyed(SurfaceHolder arg0)
-	{
-		// stop the drawThread properly
-        boolean retry = true;
-        while (retry)
-        {
-            try
-            {
-            	// wait for it to finish
-                if(drawThread!=null && drawThread.isRunning())
-            	    drawThread.join();
-                retry = false;
-            }
-            catch (InterruptedException e)
-            {
-            	// ignore any error
-                e.printStackTrace();
-            }
+    /**
+     * Request a frame. Safe from any thread; any number of calls before the frame starts
+     * collapse into a single draw of the latest data.
+     */
+    public void repaint()
+    {
+        if (!renderQueued.compareAndSet(false, true)) return;
+        if (!postRender(renderTask)) renderQueued.set(false);
+    }
+
+    /** @deprecated kept for source compatibility; rendering always happens on the render thread now */
+    @Deprecated
+    public void repaint2() {
+        repaint();
+    }
+
+    private void loadFromDatabase() {
+        Drawable current = drawable;
+        if (current == null) return;
+        try {
+            current.loadValuesFromDatabase();
+        } catch (RuntimeException e) {
+            MainActivity.debug("WidgetView: loading history failed: " + e);
         }
-        // set it to null, so that a new one can be created in case of a resume
-        drawThread=null;
-        // set parent
-        //if(canzeActivity!=null)
-        //    canzeActivity.setWidgetClicked(false);
-	}
+    }
+
+    private void renderFrame() {
+        Drawable current = drawable;
+        if (current == null || !surfaceReady) return;
+
+        SurfaceHolder holder = getHolder();
+        Canvas canvas = null;
+        try {
+            canvas = holder.lockCanvas();
+            if (canvas == null) return;
+            drawFrame(canvas, current);
+        } catch (RuntimeException e) {
+            MainActivity.debug("WidgetView: frame failed: " + e);
+        } finally {
+            if (canvas != null) unlockQuietly(holder, canvas);
+        }
+    }
+
+    private void drawFrame(Canvas canvas, Drawable current) {
+        canvas.setDrawFilter(drawFilter);
+        canvas.drawRect(0, 0, canvas.getWidth(), canvas.getHeight(), clearPaint);
+        current.setWidth(canvas.getWidth());
+        current.setHeight(canvas.getHeight());
+        graphics.beginFrame(canvas);
+        current.draw(graphics);
+    }
+
+    private static void unlockQuietly(SurfaceHolder holder, Canvas canvas) {
+        try {
+            holder.unlockCanvasAndPost(canvas);
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            // surface was released while we were drawing
+            MainActivity.debug("WidgetView: unlockCanvasAndPost failed: " + e);
+        }
+    }
 
     /* *************************************
      * Getter & Setter
