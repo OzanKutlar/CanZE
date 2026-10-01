@@ -311,7 +311,12 @@ public final class HudMediaPanel implements NowPlayingListener {
         PressFeedback.attach(previousCell, previousIcon);
         PressFeedback.attach(playCell, playButton);
         PressFeedback.attach(nextCell, nextIcon);
-        PressFeedback.attach(vinyl, null, SOFT_PRESS_SCALE);
+        DiscGestures.attach(vinyl, new DiscGestures.Callback() {
+            @Override
+            public void onSwipe(boolean towardsRight) {
+                onDiscSwiped(towardsRight);
+            }
+        });
         PressFeedback.attach(chip, null, SOFT_PRESS_SCALE);
         View.OnClickListener playPause = new View.OnClickListener() {
             @Override
@@ -374,6 +379,24 @@ public final class HudMediaPanel implements NowPlayingListener {
         lastSkipAt = SystemClock.elapsedRealtime();
         nudge(direction == TrackTransition.DIRECTION_NEXT ? nextCell : previousCell, direction);
         if (direction == TrackTransition.DIRECTION_NEXT) {
+            tracker.next();
+        } else {
+            tracker.previous();
+        }
+    }
+
+    /**
+     * Swipe right = next song, swipe left = previous song. The text leaves in the swipe's
+     * direction so it follows the finger: a right swipe uses the right-exiting transition.
+     */
+    private void onDiscSwiped(boolean towardsRight) {
+        NowPlaying current = state;
+        if (tracker == null || !current.active) return;
+        if (towardsRight ? !current.canNext : !current.canPrevious) return;
+        lastSkipDirection = towardsRight ? TrackTransition.DIRECTION_PREVIOUS : TrackTransition.DIRECTION_NEXT;
+        lastSkipAt = SystemClock.elapsedRealtime();
+        nudge(towardsRight ? nextCell : previousCell, towardsRight ? 1 : -1);
+        if (towardsRight) {
             tracker.next();
         } else {
             tracker.previous();

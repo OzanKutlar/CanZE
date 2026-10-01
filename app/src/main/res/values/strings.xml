@@ -468,7 +468,7 @@
     <string name="hud_media_access_error">Could not open the notification access settings</string>
     <string name="hud_media_unknown_title">Unknown title</string>
     <string name="hud_media_unknown_artist">Unknown artist</string>
-    <string name="hud_media_cover">Album cover, tap to play or pause</string>
+    <string name="hud_media_cover">Album cover. Tap to play or pause, swipe right for the next song and left for the previous one</string>
     <string name="hud_media_shuffle">Shuffle</string>
     <string name="hud_media_previous">Previous track</string>
     <string name="hud_media_next">Next track</string>
