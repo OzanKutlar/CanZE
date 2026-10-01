@@ -460,6 +460,23 @@
     <string name="hud_demo_start">Start demo</string>
     <string name="hud_demo_badge">DEMO &#183; tap to stop</string>
 
+    <!-- Car HUD media player -->
+
+    <string name="media_listener_label">CanZE now-playing display</string>
+    <string name="hud_media_nothing_playing">Nothing playing. Start music in any app and it will show up here.</string>
+    <string name="hud_media_access_body">Allow notification access so the HUD can show the current song and control playback.</string>
+    <string name="hud_media_access_button">Grant access</string>
+    <string name="hud_media_access_error">Could not open the notification access settings</string>
+    <string name="hud_media_unknown_title">Unknown title</string>
+    <string name="hud_media_unknown_artist">Unknown artist</string>
+    <string name="hud_media_cover">Album cover, tap to play or pause</string>
+    <string name="hud_media_shuffle">Shuffle</string>
+    <string name="hud_media_previous">Previous track</string>
+    <string name="hud_media_next">Next track</string>
+    <string name="hud_media_play">Play</string>
+    <string name="hud_media_pause">Pause</string>
+    <string name="hud_media_seek">Song position</string>
+
     <!-- Charging HUD -->
 
     <string name="title_activity_charging_hud">Charging HUD</string>

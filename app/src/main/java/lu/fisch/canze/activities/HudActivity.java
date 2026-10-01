@@ -15,6 +15,7 @@
 
 package lu.fisch.canze.activities;
 
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.os.Build;
@@ -38,6 +39,7 @@ import lu.fisch.canze.bluetooth.BluetoothManager;
 import lu.fisch.canze.devices.Device;
 import lu.fisch.canze.interfaces.DebugListener;
 import lu.fisch.canze.interfaces.FieldListener;
+import lu.fisch.canze.widgets.HudMediaPanel;
 
 /**
  * Fullscreen "car dashboard": speed, state of charge and gear in three stacked bands.
@@ -161,6 +163,7 @@ public class HudActivity extends CanzeActivity implements FieldListener, DebugLi
     private boolean linkErrorReported;
     private double demoTime;
     private double demoSoc = DEMO_START_SOC;
+    private HudMediaPanel mediaPanel;
 
     // ------------------------------------------------------------------ lifecycle
 
@@ -174,6 +177,8 @@ public class HudActivity extends CanzeActivity implements FieldListener, DebugLi
         bindViews();
         wireDemoControls();
         watchLayout();
+        mediaPanel = new HudMediaPanel(this);
+        applyMediaLayout(getResources().getConfiguration());
     }
 
     @Override
@@ -182,18 +187,21 @@ public class HudActivity extends CanzeActivity implements FieldListener, DebugLi
         enterImmersive();
         uiHandler.removeCallbacks(tickTask);
         uiHandler.post(tickTask);
+        if (mediaPanel != null) mediaPanel.onResume();
     }
 
     @Override
     protected void onPause() {
         uiHandler.removeCallbacks(tickTask);
         uiHandler.removeCallbacks(fitTask);
+        if (mediaPanel != null) mediaPanel.onPause();
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
         uiHandler.removeCallbacksAndMessages(null);
+        if (mediaPanel != null) mediaPanel.release();
         super.onDestroy();
     }
 
@@ -201,6 +209,18 @@ public class HudActivity extends CanzeActivity implements FieldListener, DebugLi
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) enterImmersive();
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        applyMediaLayout(newConfig);
+    }
+
+    /** The manifest keeps this activity alive across rotation, so the split is re-applied here. */
+    private void applyMediaLayout(Configuration config) {
+        if (mediaPanel == null || config == null) return;
+        mediaPanel.applyLayout(config.orientation == Configuration.ORIENTATION_LANDSCAPE);
     }
 
     private void hideActionBar() {
@@ -453,6 +473,7 @@ public class HudActivity extends CanzeActivity implements FieldListener, DebugLi
         }
         updateDemoControls(now);
         render(now);
+        if (mediaPanel != null) mediaPanel.onTick();
     }
 
     private void updateDemoControls(long now) {

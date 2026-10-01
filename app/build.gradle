@@ -30,5 +30,7 @@ dependencies {
     //implementation 'com.google.android.material:material:1.0.0-beta01'
     //implementation 'com.android.support.constraint:constraint-layout:+'
     implementation 'androidx.constraintlayout:constraintlayout:1.1.3'
+    // MediaControllerCompat: shuffle mode for other apps' media sessions (Car HUD player)
+    implementation 'androidx.media:media:1.0.0'
     testImplementation 'junit:junit:4.12'
 }

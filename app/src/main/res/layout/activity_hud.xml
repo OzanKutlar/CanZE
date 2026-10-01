@@ -5,104 +5,310 @@
     android:background="#0B0F19"
     android:keepScreenOn="true">
 
+    <!-- Bands plus media player. Orientation and weights are set by HudMediaPanel.applyLayout. -->
     <LinearLayout
-        android:id="@+id/hudBands"
+        android:id="@+id/hudRoot"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical">
 
-        <!-- Speed -->
-        <FrameLayout
+        <LinearLayout
+            android:id="@+id/hudBands"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1">
+            android:layout_weight="3"
+            android:orientation="vertical">
 
-            <TextView
-                android:id="@+id/hudSpeed"
+            <!-- Speed -->
+            <FrameLayout
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:gravity="center"
-                android:includeFontPadding="false"
-                android:maxLines="1"
-                android:text="@string/hud_no_value"
-                android:textColor="#4A5B73"
-                android:textSize="96sp"
-                android:textStyle="bold" />
+                android:layout_height="0dp"
+                android:layout_weight="1">
 
-            <TextView
-                android:id="@+id/hudSpeedUnit"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="top|start"
-                android:layout_margin="12dp"
-                android:textColor="#607D8B"
-                android:textSize="16sp" />
-        </FrameLayout>
+                <TextView
+                    android:id="@+id/hudSpeed"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:gravity="center"
+                    android:includeFontPadding="false"
+                    android:maxLines="1"
+                    android:text="@string/hud_no_value"
+                    android:textColor="#4A5B73"
+                    android:textSize="96sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/hudSpeedUnit"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="top|start"
+                    android:layout_margin="12dp"
+                    android:textColor="#607D8B"
+                    android:textSize="16sp" />
+            </FrameLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#1A2436" />
+
+            <!-- State of charge -->
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1">
+
+                <TextView
+                    android:id="@+id/hudSoc"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:gravity="center"
+                    android:includeFontPadding="false"
+                    android:maxLines="1"
+                    android:text="@string/hud_no_value"
+                    android:textColor="#4A5B73"
+                    android:textSize="96sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="top|start"
+                    android:layout_margin="12dp"
+                    android:text="@string/hud_label_soc"
+                    android:textColor="#607D8B"
+                    android:textSize="16sp" />
+            </FrameLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#1A2436" />
+
+            <!-- Gear -->
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1">
+
+                <TextView
+                    android:id="@+id/hudGear"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:gravity="center"
+                    android:includeFontPadding="false"
+                    android:maxLines="1"
+                    android:text="@string/hud_no_value"
+                    android:textColor="#4A5B73"
+                    android:textSize="96sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="top|start"
+                    android:layout_margin="12dp"
+                    android:text="@string/hud_label_gear"
+                    android:textColor="#607D8B"
+                    android:textSize="16sp" />
+            </FrameLayout>
+        </LinearLayout>
 
         <View
+            android:id="@+id/hudMediaDivider"
             android:layout_width="match_parent"
             android:layout_height="1dp"
             android:background="#1A2436" />
 
-        <!-- State of charge -->
+        <!-- Media player -->
         <FrameLayout
+            android:id="@+id/hudMediaPanel"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1">
+            android:layout_weight="1.4">
 
-            <TextView
-                android:id="@+id/hudSoc"
+            <LinearLayout
+                android:id="@+id/hudMediaContent"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="horizontal"
+                android:padding="12dp">
+
+                <FrameLayout
+                    android:id="@+id/hudMediaVinylFrame"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="0.42">
+
+                    <lu.fisch.canze.widgets.VinylDiscView
+                        android:id="@+id/hudMediaVinyl"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:layout_gravity="center"
+                        android:clickable="true"
+                        android:contentDescription="@string/hud_media_cover"
+                        android:focusable="true" />
+                </FrameLayout>
+
+                <LinearLayout
+                    android:id="@+id/hudMediaInfo"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_vertical"
+                    android:layout_marginLeft="12dp"
+                    android:layout_weight="0.58"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/hudMediaSource"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:singleLine="true"
+                        android:textColor="#607D8B"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/hudMediaTitle"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="marquee"
+                        android:marqueeRepeatLimit="marquee_forever"
+                        android:singleLine="true"
+                        android:textColor="#FFFFFF"
+                        android:textSize="22sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/hudMediaArtist"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:singleLine="true"
+                        android:textColor="#90A4AE"
+                        android:textSize="16sp" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/hudMediaElapsed"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:minWidth="36dp"
+                            android:text="--:--"
+                            android:textColor="#90A4AE"
+                            android:textSize="12sp" />
+
+                        <SeekBar
+                            android:id="@+id/hudMediaSeek"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:contentDescription="@string/hud_media_seek"
+                            android:maxHeight="4dp"
+                            android:minHeight="4dp"
+                            android:paddingLeft="12dp"
+                            android:paddingRight="12dp"
+                            android:progressDrawable="@drawable/hud_media_seek_progress"
+                            android:thumb="@drawable/hud_media_seek_thumb" />
+
+                        <TextView
+                            android:id="@+id/hudMediaDuration"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:gravity="end"
+                            android:minWidth="36dp"
+                            android:text="--:--"
+                            android:textColor="#90A4AE"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:gravity="center"
+                        android:orientation="horizontal">
+
+                        <ImageButton
+                            android:id="@+id/hudMediaShuffle"
+                            android:layout_width="40dp"
+                            android:layout_height="40dp"
+                            android:layout_marginRight="6dp"
+                            android:background="?attr/selectableItemBackgroundBorderless"
+                            android:contentDescription="@string/hud_media_shuffle"
+                            android:padding="8dp"
+                            android:scaleType="fitCenter"
+                            android:src="@drawable/hud_ic_shuffle" />
+
+                        <ImageButton
+                            android:id="@+id/hudMediaPrevious"
+                            android:layout_width="48dp"
+                            android:layout_height="48dp"
+                            android:layout_marginRight="6dp"
+                            android:background="?attr/selectableItemBackgroundBorderless"
+                            android:contentDescription="@string/hud_media_previous"
+                            android:padding="10dp"
+                            android:scaleType="fitCenter"
+                            android:src="@drawable/hud_ic_previous"
+                            android:tint="#CFD8DC" />
+
+                        <ImageButton
+                            android:id="@+id/hudMediaPlay"
+                            android:layout_width="56dp"
+                            android:layout_height="56dp"
+                            android:layout_marginRight="6dp"
+                            android:background="@drawable/hud_media_play_bg"
+                            android:contentDescription="@string/hud_media_play"
+                            android:padding="14dp"
+                            android:scaleType="fitCenter"
+                            android:src="@drawable/hud_ic_play"
+                            android:tint="#0B0F19" />
+
+                        <ImageButton
+                            android:id="@+id/hudMediaNext"
+                            android:layout_width="48dp"
+                            android:layout_height="48dp"
+                            android:background="?attr/selectableItemBackgroundBorderless"
+                            android:contentDescription="@string/hud_media_next"
+                            android:padding="10dp"
+                            android:scaleType="fitCenter"
+                            android:src="@drawable/hud_ic_next"
+                            android:tint="#CFD8DC" />
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/hudMediaOverlay"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:gravity="center"
-                android:includeFontPadding="false"
-                android:maxLines="1"
-                android:text="@string/hud_no_value"
-                android:textColor="#4A5B73"
-                android:textSize="96sp"
-                android:textStyle="bold" />
+                android:orientation="vertical"
+                android:padding="16dp"
+                android:visibility="gone">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="top|start"
-                android:layout_margin="12dp"
-                android:text="@string/hud_label_soc"
-                android:textColor="#607D8B"
-                android:textSize="16sp" />
-        </FrameLayout>
+                <TextView
+                    android:id="@+id/hudMediaOverlayText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:textColor="#90A4AE"
+                    android:textSize="16sp" />
 
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="#1A2436" />
-
-        <!-- Gear -->
-        <FrameLayout
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1">
-
-            <TextView
-                android:id="@+id/hudGear"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:gravity="center"
-                android:includeFontPadding="false"
-                android:maxLines="1"
-                android:text="@string/hud_no_value"
-                android:textColor="#4A5B73"
-                android:textSize="96sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="top|start"
-                android:layout_margin="12dp"
-                android:text="@string/hud_label_gear"
-                android:textColor="#607D8B"
-                android:textSize="16sp" />
+                <Button
+                    android:id="@+id/hudMediaGrant"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/hud_media_access_button"
+                    android:visibility="gone" />
+            </LinearLayout>
         </FrameLayout>
     </LinearLayout>
 
