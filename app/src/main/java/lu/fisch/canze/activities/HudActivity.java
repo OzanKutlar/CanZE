@@ -277,7 +277,7 @@ public class HudActivity extends CanzeActivity implements FieldListener, DebugLi
 
     /** Text sizes are fitted once per size change, never per update. */
     private void watchLayout() {
-        findViewById(R.id.hudBands).addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+        View.OnLayoutChangeListener refit = new View.OnLayoutChangeListener() {
             @Override
             public void onLayoutChange(View v, int left, int top, int right, int bottom,
                                        int oldLeft, int oldTop, int oldRight, int oldBottom) {
@@ -287,7 +287,10 @@ public class HudActivity extends CanzeActivity implements FieldListener, DebugLi
                 uiHandler.removeCallbacks(fitTask);
                 uiHandler.post(fitTask);
             }
-        });
+        };
+        findViewById(R.id.hudBands).addOnLayoutChangeListener(refit);
+        // The gear band hides while the media player holds its slot; re-fit when it returns.
+        findViewById(R.id.hudGearBand).addOnLayoutChangeListener(refit);
     }
 
     private void fitTextSizes() {

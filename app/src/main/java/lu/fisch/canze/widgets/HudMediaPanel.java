@@ -5,10 +5,8 @@ import android.content.ActivityNotFoundException;
 import android.os.Build;
 import android.os.SystemClock;
 import android.text.TextUtils;
-import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
@@ -26,29 +24,31 @@ import lu.fisch.canze.media.NowPlayingTracker;
 import lu.fisch.canze.media.PlaybackClock;
 
 /**
- * The Car HUD media panel: spinning vinyl cover, track info, seek bar and transport
- * buttons. Like the rest of the HUD, views are only touched when what they show changes.
- * Main thread only. Below Android 5.0 the panel hides itself.
+ * Car HUD media player. While a player session exists (playing or paused) it takes the
+ * gear band's place: the third band in portrait, the right half of the screen in
+ * landscape. Without a session the HUD looks exactly as before; the gear band returns a
+ * few seconds after the session ends so track changes do not flicker.
+ *
+ * Views are only touched when what they show changes. Main thread only.
+ * Below Android 5.0 the player never appears.
  */
 public final class HudMediaPanel implements NowPlayingListener {
 
     private static final long TICK_INTERVAL_MS = 250L;
+    private static final long SLOT_HOLD_MS = 3000L;
     private static final long SEEK_SETTLE_WINDOW_MS = 2000L;
     private static final long SEEK_MATCH_TOLERANCE_MS = 3000L;
     private static final long NO_VALUE = Long.MIN_VALUE;
     private static final int ART_SIZE_DP = 320;
-    private static final int INFO_GAP_DP = 12;
-    private static final float PORTRAIT_BANDS_WEIGHT = 3f;
-    private static final float PORTRAIT_MEDIA_WEIGHT = 1.4f;
-    private static final float LANDSCAPE_BANDS_WEIGHT = 1.15f;
-    private static final float LANDSCAPE_MEDIA_WEIGHT = 1f;
-    private static final float PORTRAIT_VINYL_WEIGHT = 0.42f;
-    private static final float PORTRAIT_INFO_WEIGHT = 0.58f;
+    private static final float BANDS_WEIGHT = 2f;
+    private static final float GEAR_SLOT_WEIGHT = 1f;
+    private static final float PORTRAIT_MEDIA_SLOT_WEIGHT = 1.25f;
+    private static final float SPLIT_BANDS_WEIGHT = 1f;
+    private static final float SPLIT_MEDIA_WEIGHT = 1f;
     private static final float DISABLED_ALPHA = 0.35f;
     private static final int COLOR_ON = 0xFF00E676;
-    private static final int COLOR_IDLE = 0xFFCFD8DC;
+    private static final int COLOR_IDLE = 0xFFECEFF1;
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
-    private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
     private static final String NO_TIME = "--:--";
 
     private final Activity activity;
@@ -58,35 +58,37 @@ public final class HudMediaPanel implements NowPlayingListener {
 
     private LinearLayout root;
     private View bands;
-    private View divider;
+    private View slotDivider;
+    private View slot;
+    private View gearBand;
+    private View chip;
     private View panel;
-    private LinearLayout content;
-    private View vinylFrame;
-    private View info;
-    private View overlay;
-    private View grantButton;
+    private CoverAmbienceView ambience;
     private VinylDiscView vinyl;
     private TextView sourceView;
-    private TextView titleView;
+    private MarqueeTextView titleView;
     private TextView artistView;
     private TextView elapsedView;
     private TextView durationView;
-    private TextView overlayText;
     private SeekBar seekBar;
-    private ImageButton shuffleButton;
-    private ImageButton previousButton;
-    private ImageButton playButton;
-    private ImageButton nextButton;
+    private View shuffleCell;
+    private ImageView shuffleIcon;
+    private View previousCell;
+    private View playCell;
+    private ImageView playIcon;
+    private View nextCell;
 
     private NowPlaying state;
+    private boolean landscape;
+    private boolean mediaShown;
     private boolean dragging;
+    private long hideMediaAt;
     private long pendingSeekMs = -1L;
     private long pendingSeekAt;
     private long lastTickAt;
     private long shownElapsedSecond = NO_VALUE;
     private long shownDurationMs = NO_VALUE;
     private int shownPlayIcon;
-    private int shownOverlayText;
 
     private final SeekBar.OnSeekBarChangeListener seekListener = new SeekBar.OnSeekBarChangeListener() {
         @Override
@@ -115,11 +117,7 @@ public final class HudMediaPanel implements NowPlayingListener {
         bindViews();
         wireControls();
         this.tracker = createTracker();
-        if (tracker == null) {
-            hidePanel();
-        } else {
-            render(SystemClock.elapsedRealtime());
-        }
+        render(SystemClock.elapsedRealtime());
     }
 
     // ------------------------------------------------------------------ lifecycle
@@ -137,24 +135,23 @@ public final class HudMediaPanel implements NowPlayingListener {
         if (tracker != null) tracker.release();
     }
 
-    /** Called from the HUD's 50 ms tick; refreshes the seek position at 4 Hz while active. */
+    /** Called from the HUD's 50 ms tick: seek position at 4 Hz, and the gear hand-back. */
     public void onTick() {
-        if (tracker == null || !state.active) return;
+        if (tracker == null) return;
         long now = SystemClock.elapsedRealtime();
         if (now - lastTickAt < TICK_INTERVAL_MS) return;
         lastTickAt = now;
-        renderProgress(state, now);
+        if (state.active) {
+            renderProgress(state, now);
+        } else {
+            updateSlot(false, now);
+        }
     }
 
-    /** Portrait: bands above the player. Landscape: bands left, player right. */
+    /** Called on creation and on rotation. */
     public void applyLayout(boolean landscape) {
-        root.setOrientation(landscape ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
-        bands.setLayoutParams(weighted(landscape, landscape ? LANDSCAPE_BANDS_WEIGHT : PORTRAIT_BANDS_WEIGHT));
-        panel.setLayoutParams(weighted(landscape, landscape ? LANDSCAPE_MEDIA_WEIGHT : PORTRAIT_MEDIA_WEIGHT));
-        divider.setLayoutParams(landscape
-                ? new LinearLayout.LayoutParams(dp(1), MATCH)
-                : new LinearLayout.LayoutParams(MATCH, dp(1)));
-        layoutContent(landscape);
+        this.landscape = landscape;
+        applyStructure();
     }
 
     @Override
@@ -181,14 +178,12 @@ public final class HudMediaPanel implements NowPlayingListener {
     private void bindViews() {
         root = find(R.id.hudRoot);
         bands = find(R.id.hudBands);
-        divider = find(R.id.hudMediaDivider);
+        slotDivider = find(R.id.hudSlotDivider);
+        slot = find(R.id.hudSlot);
+        gearBand = find(R.id.hudGearBand);
+        chip = find(R.id.hudMediaChip);
         panel = find(R.id.hudMediaPanel);
-        content = find(R.id.hudMediaContent);
-        vinylFrame = find(R.id.hudMediaVinylFrame);
-        info = find(R.id.hudMediaInfo);
-        overlay = find(R.id.hudMediaOverlay);
-        overlayText = find(R.id.hudMediaOverlayText);
-        grantButton = find(R.id.hudMediaGrant);
+        ambience = find(R.id.hudMediaAmbience);
         vinyl = find(R.id.hudMediaVinyl);
         sourceView = find(R.id.hudMediaSource);
         titleView = find(R.id.hudMediaTitle);
@@ -196,11 +191,12 @@ public final class HudMediaPanel implements NowPlayingListener {
         elapsedView = find(R.id.hudMediaElapsed);
         durationView = find(R.id.hudMediaDuration);
         seekBar = find(R.id.hudMediaSeek);
-        shuffleButton = find(R.id.hudMediaShuffle);
-        previousButton = find(R.id.hudMediaPrevious);
-        playButton = find(R.id.hudMediaPlay);
-        nextButton = find(R.id.hudMediaNext);
-        titleView.setSelected(true); // starts the marquee for long titles
+        shuffleCell = find(R.id.hudMediaShuffle);
+        shuffleIcon = find(R.id.hudMediaShuffleIcon);
+        previousCell = find(R.id.hudMediaPrevious);
+        playCell = find(R.id.hudMediaPlay);
+        playIcon = find(R.id.hudMediaPlayIcon);
+        nextCell = find(R.id.hudMediaNext);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             elapsedView.setFontFeatureSettings("tnum");
             durationView.setFontFeatureSettings("tnum");
@@ -222,27 +218,27 @@ public final class HudMediaPanel implements NowPlayingListener {
                 if (tracker != null) tracker.togglePlayPause();
             }
         };
-        playButton.setOnClickListener(playPause);
+        playCell.setOnClickListener(playPause);
         vinyl.setOnClickListener(playPause);
-        previousButton.setOnClickListener(new View.OnClickListener() {
+        previousCell.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (tracker != null) tracker.previous();
             }
         });
-        nextButton.setOnClickListener(new View.OnClickListener() {
+        nextCell.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (tracker != null) tracker.next();
             }
         });
-        shuffleButton.setOnClickListener(new View.OnClickListener() {
+        shuffleCell.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (tracker != null) tracker.toggleShuffle();
             }
         });
-        grantButton.setOnClickListener(new View.OnClickListener() {
+        chip.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 openAccessSettings();
@@ -252,25 +248,47 @@ public final class HudMediaPanel implements NowPlayingListener {
         seekBar.setOnSeekBarChangeListener(seekListener);
     }
 
-    private void hidePanel() {
-        panel.setVisibility(View.GONE);
-        divider.setVisibility(View.GONE);
+    // ------------------------------------------------------------------ gear slot
+
+    /** Media takes the slot at once; gear only returns after the hold-off. */
+    private void updateSlot(boolean active, long now) {
+        if (active) {
+            hideMediaAt = 0L;
+            showMedia(true);
+            return;
+        }
+        if (!mediaShown) return;
+        if (hideMediaAt == 0L) {
+            hideMediaAt = now + SLOT_HOLD_MS;
+        } else if (now >= hideMediaAt) {
+            hideMediaAt = 0L;
+            showMedia(false);
+        }
     }
 
-    private void layoutContent(boolean landscape) {
-        content.setOrientation(landscape ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
-        if (landscape) {
-            vinylFrame.setLayoutParams(new LinearLayout.LayoutParams(MATCH, 0, 1f));
-            LinearLayout.LayoutParams infoParams = new LinearLayout.LayoutParams(MATCH, WRAP);
-            infoParams.topMargin = dp(INFO_GAP_DP);
-            info.setLayoutParams(infoParams);
-        } else {
-            vinylFrame.setLayoutParams(new LinearLayout.LayoutParams(0, MATCH, PORTRAIT_VINYL_WEIGHT));
-            LinearLayout.LayoutParams infoParams = new LinearLayout.LayoutParams(0, WRAP, PORTRAIT_INFO_WEIGHT);
-            infoParams.leftMargin = dp(INFO_GAP_DP);
-            infoParams.gravity = Gravity.CENTER_VERTICAL;
-            info.setLayoutParams(infoParams);
-        }
+    private void showMedia(boolean show) {
+        if (show == mediaShown) return;
+        mediaShown = show;
+        setVisibility(panel, show ? View.VISIBLE : View.GONE);
+        setVisibility(gearBand, show ? View.GONE : View.VISIBLE);
+        applyStructure();
+    }
+
+    /**
+     * Portrait, or no player: speed / SoC / slot stacked vertically, as before.
+     * Landscape with a player: speed and SoC on the left, the player on the right.
+     */
+    private void applyStructure() {
+        boolean split = landscape && mediaShown;
+        float slotWeight = split ? SPLIT_MEDIA_WEIGHT
+                : (mediaShown ? PORTRAIT_MEDIA_SLOT_WEIGHT : GEAR_SLOT_WEIGHT);
+        root.setOrientation(split ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
+        bands.setLayoutParams(weighted(split, split ? SPLIT_BANDS_WEIGHT : BANDS_WEIGHT));
+        slot.setLayoutParams(weighted(split, slotWeight));
+        slotDivider.setLayoutParams(split
+                ? new LinearLayout.LayoutParams(dp(1), MATCH)
+                : new LinearLayout.LayoutParams(MATCH, dp(1)));
+        ambience.setBlendTop(!split);
     }
 
     private static LinearLayout.LayoutParams weighted(boolean horizontal, float weight) {
@@ -335,40 +353,34 @@ public final class HudMediaPanel implements NowPlayingListener {
     private void render(long now) {
         if (tracker == null) return;
         NowPlaying current = state;
-        renderOverlay(current);
+        setVisibility(chip, current.accessGranted ? View.GONE : View.VISIBLE);
+        updateSlot(current.active, now);
+        if (!current.active) {
+            // Keep the last track on screen during the hold-off, just stop the record.
+            vinyl.setPlaying(false);
+            return;
+        }
         renderTrack(current);
         renderButtons(current);
         renderProgress(current, now);
         vinyl.setArt(current.art);
-        vinyl.setPlaying(current.active && current.clockRunning);
-    }
-
-    private void renderOverlay(NowPlaying current) {
-        boolean needsAccess = !current.accessGranted;
-        boolean showOverlay = needsAccess || !current.active;
-        setVisibility(overlay, showOverlay ? View.VISIBLE : View.GONE);
-        setVisibility(content, showOverlay ? View.INVISIBLE : View.VISIBLE);
-        setVisibility(grantButton, needsAccess ? View.VISIBLE : View.GONE);
-        int text = needsAccess ? R.string.hud_media_access_body : R.string.hud_media_nothing_playing;
-        if (text == shownOverlayText) return;
-        shownOverlayText = text;
-        overlayText.setText(text);
+        ambience.setArt(current.art);
+        vinyl.setPlaying(current.clockRunning);
     }
 
     private void renderTrack(NowPlaying current) {
         setText(sourceView, current.source == null ? "" : current.source.toUpperCase(Locale.getDefault()));
-        setText(titleView, TextUtils.isEmpty(current.title) ? unknownTitle : current.title);
+        titleView.setText(TextUtils.isEmpty(current.title) ? unknownTitle : current.title);
         setText(artistView, TextUtils.isEmpty(current.artist) ? unknownArtist : current.artist);
     }
 
     private void renderButtons(NowPlaying current) {
-        setUsable(previousButton, current.active && current.canPrevious);
-        setUsable(nextButton, current.active && current.canNext);
-        setUsable(playButton, current.active && current.canPlayPause);
-        boolean shuffleUsable = current.active && current.shuffleSupported;
-        setUsable(shuffleButton, shuffleUsable);
-        tint(shuffleButton, shuffleUsable && current.shuffleOn ? COLOR_ON : COLOR_IDLE);
-        setUsable(seekBar, current.active && current.canSeek);
+        setUsable(previousCell, current.canPrevious);
+        setUsable(nextCell, current.canNext);
+        setUsable(playCell, current.canPlayPause);
+        setUsable(shuffleCell, current.shuffleSupported);
+        tint(shuffleIcon, current.shuffleSupported && current.shuffleOn ? COLOR_ON : COLOR_IDLE);
+        setUsable(seekBar, current.canSeek);
         renderPlayIcon(current.playing);
     }
 
@@ -376,8 +388,8 @@ public final class HudMediaPanel implements NowPlayingListener {
         int icon = playing ? R.drawable.hud_ic_pause : R.drawable.hud_ic_play;
         if (icon == shownPlayIcon) return;
         shownPlayIcon = icon;
-        playButton.setImageResource(icon);
-        playButton.setContentDescription(activity.getString(playing ? R.string.hud_media_pause : R.string.hud_media_play));
+        playIcon.setImageResource(icon);
+        playCell.setContentDescription(activity.getString(playing ? R.string.hud_media_pause : R.string.hud_media_play));
     }
 
     private void renderProgress(NowPlaying current, long now) {
@@ -390,10 +402,10 @@ public final class HudMediaPanel implements NowPlayingListener {
         long position = displayedPosition(current, now);
         int progress = PlaybackClock.toPermille(position, duration);
         if (seekBar.getProgress() != progress) seekBar.setProgress(progress);
-        long second = current.active ? position / 1000L : -1L;
+        long second = position / 1000L;
         if (second == shownElapsedSecond) return;
         shownElapsedSecond = second;
-        elapsedView.setText(current.active ? PlaybackClock.format(position) : NO_TIME);
+        elapsedView.setText(PlaybackClock.format(position));
     }
 
     // ------------------------------------------------------------------ view helpers

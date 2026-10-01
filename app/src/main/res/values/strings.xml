@@ -463,9 +463,8 @@
     <!-- Car HUD media player -->
 
     <string name="media_listener_label">CanZE now-playing display</string>
-    <string name="hud_media_nothing_playing">Nothing playing. Start music in any app and it will show up here.</string>
-    <string name="hud_media_access_body">Allow notification access so the HUD can show the current song and control playback.</string>
-    <string name="hud_media_access_button">Grant access</string>
+    <string name="hud_media_enable_chip">&#9834; Enable media</string>
+    <string name="hud_media_enable_chip_description">Allow notification access so the HUD can show and control the music that is playing</string>
     <string name="hud_media_access_error">Could not open the notification access settings</string>
     <string name="hud_media_unknown_title">Unknown title</string>
     <string name="hud_media_unknown_artist">Unknown artist</string>

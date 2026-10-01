@@ -6,6 +6,7 @@ import android.graphics.BitmapShader;
 import android.graphics.Canvas;
 import android.graphics.Matrix;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
@@ -15,9 +16,9 @@ import android.view.View;
 import androidx.core.view.ViewCompat;
 
 /**
- * A vinyl record showing the album cover on its centre label. It spins slowly while music
- * plays, eases in on play and coasts to a stop on pause. The frame loop only runs while
- * the disc is moving and visible, so a paused record costs nothing.
+ * A vinyl record whose whole surface is the album cover, with a see-through spindle hole
+ * in the middle. It spins slowly while music plays, eases in on play and coasts to a stop
+ * on pause. The frame loop only runs while the disc is moving and visible.
  */
 public class VinylDiscView extends View {
 
@@ -29,10 +30,11 @@ public class VinylDiscView extends View {
     private static final float NANOS_PER_SECOND = 1e9f;
     private static final int DEFAULT_SIZE_DP = 160;
     private static final int GROOVE_COUNT = 22;
-    private static final float LABEL_FRACTION = 0.38f;
-    private static final float HOLE_FRACTION = 0.035f;
+    private static final float HOLE_FRACTION = 0.09f;
+    private static final float LABEL_FRACTION = 0.36f;
     private static final float GROOVE_INNER = 1.12f;
     private static final float GROOVE_OUTER = 0.96f;
+    private static final float ART_GROOVE_ALPHA_SCALE = 0.22f;
     private static final float ACCENT_INSET = 0.3f;
     private static final float SHEEN_START_A = -70f;
     private static final float SHEEN_START_B = 110f;
@@ -41,22 +43,23 @@ public class VinylDiscView extends View {
     private static final int COLOR_DISC_CENTER = 0xFF1C1F26;
     private static final int COLOR_DISC_EDGE = 0xFF07090D;
     private static final int COLOR_GROOVE = 0xFF2E3440;
+    private static final int COLOR_GROOVE_ON_ART = 0xFF000000;
     private static final int COLOR_RIM = 0xFF3A4252;
     private static final int COLOR_LABEL_EMPTY = 0xFF1A2436;
-    private static final int COLOR_LABEL_EDGE = 0x66000000;
+    private static final int COLOR_HOLE_RIM = 0x99000000;
     private static final int COLOR_ACCENT = 0xFF00E676;
     private static final int COLOR_SHEEN = 0x14FFFFFF;
-    private static final int COLOR_HOLE = 0xFF0B0F19;
 
     private final Paint discPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint artPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint groovePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint rimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint labelPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+    private final Paint holeRimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint labelEmptyPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint labelEdgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint accentPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint sheenPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint holePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Path discPath = new Path();
+    private final Path labelPath = new Path();
     private final Matrix shaderMatrix = new Matrix();
     private final RectF discBounds = new RectF();
     private final RectF accentBounds = new RectF();
@@ -76,6 +79,7 @@ public class VinylDiscView extends View {
     private float cx;
     private float cy;
     private float radius;
+    private float holeRadius;
     private float labelRadius;
     private float angle;
     private float velocity;
@@ -101,36 +105,34 @@ public class VinylDiscView extends View {
     private void init() {
         float density = getResources().getDisplayMetrics().density;
         discPaint.setStyle(Paint.Style.FILL);
+        artPaint.setStyle(Paint.Style.FILL);
         groovePaint.setStyle(Paint.Style.STROKE);
-        groovePaint.setColor(COLOR_GROOVE);
         rimPaint.setStyle(Paint.Style.STROKE);
         rimPaint.setStrokeWidth(1.5f * density);
         rimPaint.setColor(COLOR_RIM);
+        holeRimPaint.setStyle(Paint.Style.STROKE);
+        holeRimPaint.setStrokeWidth(2f * density);
+        holeRimPaint.setColor(COLOR_HOLE_RIM);
         labelEmptyPaint.setStyle(Paint.Style.FILL);
         labelEmptyPaint.setColor(COLOR_LABEL_EMPTY);
-        labelEdgePaint.setStyle(Paint.Style.STROKE);
-        labelEdgePaint.setStrokeWidth(2f * density);
-        labelEdgePaint.setColor(COLOR_LABEL_EDGE);
         accentPaint.setStyle(Paint.Style.STROKE);
         accentPaint.setStrokeWidth(3f * density);
         accentPaint.setStrokeCap(Paint.Cap.ROUND);
         accentPaint.setColor(COLOR_ACCENT);
         sheenPaint.setStyle(Paint.Style.FILL);
         sheenPaint.setColor(COLOR_SHEEN);
-        holePaint.setStyle(Paint.Style.FILL);
-        holePaint.setColor(COLOR_HOLE);
     }
 
     // ------------------------------------------------------------------ public API
 
-    /** Shows the cover on the label; null shows the empty label. */
+    /** Covers the whole disc with the album art; null shows the dark vinyl placeholder. */
     public void setArt(Bitmap bitmap) {
         Bitmap usable = (bitmap != null && !bitmap.isRecycled()) ? bitmap : null;
         if (usable == art) return;
         art = usable;
         artShader = usable == null ? null
                 : new BitmapShader(usable, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
-        labelPaint.setShader(artShader);
+        artPaint.setShader(artShader);
         updateShaderMatrix();
         invalidate();
     }
@@ -169,15 +171,27 @@ public class VinylDiscView extends View {
         cx = w / 2f;
         cy = h / 2f;
         radius = Math.max(0f, Math.min(w, h) / 2f - rimPaint.getStrokeWidth());
+        holeRadius = radius * HOLE_FRACTION;
         labelRadius = radius * LABEL_FRACTION;
         discBounds.set(cx - radius, cy - radius, cx + radius, cy + radius);
         float accent = labelRadius * (1f - ACCENT_INSET);
         accentBounds.set(cx - accent, cy - accent, cx + accent, cy + accent);
+        rebuildRing(discPath, radius);
+        rebuildRing(labelPath, labelRadius);
         discPaint.setShader(radius > 0f
                 ? new RadialGradient(cx, cy, radius, COLOR_DISC_CENTER, COLOR_DISC_EDGE, Shader.TileMode.CLAMP)
                 : null);
         layoutGrooves();
         updateShaderMatrix();
+    }
+
+    /** A filled circle with the spindle hole cut out, so whatever is behind shows through. */
+    private void rebuildRing(Path path, float outer) {
+        path.reset();
+        path.setFillType(Path.FillType.EVEN_ODD);
+        if (outer <= holeRadius) return;
+        path.addCircle(cx, cy, outer, Path.Direction.CW);
+        path.addCircle(cx, cy, holeRadius, Path.Direction.CW);
     }
 
     private void layoutGrooves() {
@@ -191,12 +205,12 @@ public class VinylDiscView extends View {
         }
     }
 
-    /** Centre-crops the cover into the label circle. */
+    /** Centre-crops the cover over the full disc. */
     private void updateShaderMatrix() {
-        if (artShader == null || art == null || labelRadius <= 0f) return;
+        if (artShader == null || art == null || radius <= 0f) return;
         int shortest = Math.min(art.getWidth(), art.getHeight());
         if (shortest <= 0) return;
-        float scale = labelRadius * 2f / shortest;
+        float scale = radius * 2f / shortest;
         shaderMatrix.setScale(scale, scale);
         shaderMatrix.postTranslate(cx - art.getWidth() * scale / 2f, cy - art.getHeight() * scale / 2f);
         artShader.setLocalMatrix(shaderMatrix);
@@ -210,32 +224,36 @@ public class VinylDiscView extends View {
         if (radius <= 0f) return;
         canvas.save();
         canvas.rotate(angle, cx, cy);
-        canvas.drawCircle(cx, cy, radius, discPaint);
-        drawGrooves(canvas);
-        drawLabel(canvas);
+        if (artShader != null) {
+            canvas.drawPath(discPath, artPaint);
+            drawGrooves(canvas, COLOR_GROOVE_ON_ART, ART_GROOVE_ALPHA_SCALE);
+        } else {
+            canvas.drawPath(discPath, discPaint);
+            drawGrooves(canvas, COLOR_GROOVE, 1f);
+            canvas.drawPath(labelPath, labelEmptyPaint);
+            canvas.drawArc(accentBounds, -60f, 120f, false, accentPaint);
+        }
         canvas.restore();
-        // Glare stays put while the record turns underneath it.
-        canvas.drawArc(discBounds, SHEEN_START_A, SHEEN_SWEEP, true, sheenPaint);
-        canvas.drawArc(discBounds, SHEEN_START_B, SHEEN_SWEEP, true, sheenPaint);
+        drawSheen(canvas);
         canvas.drawCircle(cx, cy, radius, rimPaint);
-        canvas.drawCircle(cx, cy, radius * HOLE_FRACTION, holePaint);
+        canvas.drawCircle(cx, cy, holeRadius, holeRimPaint);
     }
 
-    private void drawGrooves(Canvas canvas) {
+    private void drawGrooves(Canvas canvas, int color, float alphaScale) {
+        groovePaint.setColor(color);
         for (int i = 0; i < GROOVE_COUNT; i++) {
-            groovePaint.setAlpha(grooveAlpha[i]);
+            groovePaint.setAlpha(Math.round(grooveAlpha[i] * alphaScale));
             canvas.drawCircle(cx, cy, grooveRadii[i], groovePaint);
         }
     }
 
-    private void drawLabel(Canvas canvas) {
-        if (artShader != null) {
-            canvas.drawCircle(cx, cy, labelRadius, labelPaint);
-        } else {
-            canvas.drawCircle(cx, cy, labelRadius, labelEmptyPaint);
-            canvas.drawArc(accentBounds, -60f, 120f, false, accentPaint);
-        }
-        canvas.drawCircle(cx, cy, labelRadius, labelEdgePaint);
+    /** Fixed glare: it stays put while the record turns underneath, and skips the hole. */
+    private void drawSheen(Canvas canvas) {
+        canvas.save();
+        canvas.clipPath(discPath);
+        canvas.drawArc(discBounds, SHEEN_START_A, SHEEN_SWEEP, true, sheenPaint);
+        canvas.drawArc(discBounds, SHEEN_START_B, SHEEN_SWEEP, true, sheenPaint);
+        canvas.restore();
     }
 
     // ------------------------------------------------------------------ animation
