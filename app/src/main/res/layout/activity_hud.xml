@@ -156,6 +156,7 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
+                    android:clipChildren="false"
                     android:orientation="vertical">
 
                     <LinearLayout
@@ -191,32 +192,40 @@
                             android:layout_weight="0.58"
                             android:orientation="vertical">
 
-                            <TextView
-                                android:id="@+id/hudMediaSource"
+                            <!-- Fades and slides as one unit on track changes -->
+                            <LinearLayout
+                                android:id="@+id/hudMediaTextBlock"
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
-                                android:ellipsize="end"
-                                android:singleLine="true"
-                                android:textColor="#B0BEC5"
-                                android:textSize="12sp" />
+                                android:orientation="vertical">
 
-                            <lu.fisch.canze.widgets.MarqueeTextView
-                                android:id="@+id/hudMediaTitle"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="2dp"
-                                android:textColor="#FFFFFF"
-                                android:textSize="24sp"
-                                android:textStyle="bold" />
+                                <TextView
+                                    android:id="@+id/hudMediaSource"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:ellipsize="end"
+                                    android:singleLine="true"
+                                    android:textColor="#B0BEC5"
+                                    android:textSize="12sp" />
 
-                            <TextView
-                                android:id="@+id/hudMediaArtist"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:ellipsize="end"
-                                android:singleLine="true"
-                                android:textColor="#CFD8DC"
-                                android:textSize="16sp" />
+                                <lu.fisch.canze.widgets.MarqueeTextView
+                                    android:id="@+id/hudMediaTitle"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="2dp"
+                                    android:textColor="#FFFFFF"
+                                    android:textSize="24sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/hudMediaArtist"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:ellipsize="end"
+                                    android:singleLine="true"
+                                    android:textColor="#CFD8DC"
+                                    android:textSize="16sp" />
+                            </LinearLayout>
 
                             <LinearLayout
                                 android:layout_width="match_parent"
@@ -262,6 +271,7 @@
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="72dp"
+                        android:clipChildren="false"
                         android:orientation="horizontal"
                         android:paddingLeft="8dp"
                         android:paddingRight="8dp"
@@ -297,6 +307,7 @@
                             android:focusable="true">
 
                             <ImageView
+                                android:id="@+id/hudMediaPreviousIcon"
                                 android:layout_width="40dp"
                                 android:layout_height="40dp"
                                 android:layout_gravity="center"
@@ -312,19 +323,34 @@
                             android:layout_weight="1"
                             android:background="@drawable/hud_media_cell_bg"
                             android:clickable="true"
+                            android:clipChildren="false"
                             android:contentDescription="@string/hud_media_play"
                             android:focusable="true">
 
-                            <ImageView
-                                android:id="@+id/hudMediaPlayIcon"
+                            <View
+                                android:id="@+id/hudMediaPlayPulse"
                                 android:layout_width="64dp"
                                 android:layout_height="64dp"
                                 android:layout_gravity="center"
-                                android:background="@drawable/hud_media_play_bg"
-                                android:contentDescription="@null"
-                                android:padding="16dp"
-                                android:src="@drawable/hud_ic_play"
-                                android:tint="#0B0F19" />
+                                android:alpha="0"
+                                android:background="@drawable/hud_media_play_pulse" />
+
+                            <FrameLayout
+                                android:id="@+id/hudMediaPlayButton"
+                                android:layout_width="64dp"
+                                android:layout_height="64dp"
+                                android:layout_gravity="center"
+                                android:background="@drawable/hud_media_play_bg">
+
+                                <ImageView
+                                    android:id="@+id/hudMediaPlayIcon"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="match_parent"
+                                    android:contentDescription="@null"
+                                    android:padding="16dp"
+                                    android:src="@drawable/hud_ic_play"
+                                    android:tint="#0B0F19" />
+                            </FrameLayout>
                         </FrameLayout>
 
                         <FrameLayout
@@ -338,6 +364,7 @@
                             android:focusable="true">
 
                             <ImageView
+                                android:id="@+id/hudMediaNextIcon"
                                 android:layout_width="40dp"
                                 android:layout_height="40dp"
                                 android:layout_gravity="center"

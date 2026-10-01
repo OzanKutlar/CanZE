@@ -12,13 +12,17 @@ import android.graphics.RectF;
 import android.graphics.Shader;
 import android.util.AttributeSet;
 import android.view.View;
+import android.view.animation.DecelerateInterpolator;
+import android.view.animation.Interpolator;
+import android.view.animation.OvershootInterpolator;
 
 import androidx.core.view.ViewCompat;
 
 /**
- * A vinyl record whose whole surface is the album cover, with a see-through spindle hole
- * in the middle. It spins slowly while music plays, eases in on play and coasts to a stop
- * on pause. The frame loop only runs while the disc is moving and visible.
+ * A vinyl record whose whole surface is the album cover, with a see-through spindle hole.
+ * It spins slowly while music plays, eases in on play and coasts to a stop on pause.
+ * New covers crossfade in while spinning, and {@link #playDrop()} gives a small
+ * "new record" bounce. The frame loop only runs while something moves and is visible.
  */
 public class VinylDiscView extends View {
 
@@ -28,6 +32,9 @@ public class VinylDiscView extends View {
     private static final float STOP_VELOCITY = 0.5f;       // deg/s
     private static final float MAX_FRAME_SECONDS = 0.1f;
     private static final float NANOS_PER_SECOND = 1e9f;
+    private static final long CROSSFADE_NANOS = 450000000L;
+    private static final long DROP_NANOS = 450000000L;
+    private static final float DROP_START_SCALE = 0.94f;
     private static final int DEFAULT_SIZE_DP = 160;
     private static final int GROOVE_COUNT = 22;
     private static final float HOLE_FRACTION = 0.09f;
@@ -39,6 +46,9 @@ public class VinylDiscView extends View {
     private static final float SHEEN_START_A = -70f;
     private static final float SHEEN_START_B = 110f;
     private static final float SHEEN_SWEEP = 35f;
+    private static final int OPAQUE = 255;
+    private static final Interpolator FADE_INTERPOLATOR = new DecelerateInterpolator();
+    private static final Interpolator DROP_INTERPOLATOR = new OvershootInterpolator(1.5f);
 
     private static final int COLOR_DISC_CENTER = 0xFF1C1F26;
     private static final int COLOR_DISC_EDGE = 0xFF07090D;
@@ -52,6 +62,7 @@ public class VinylDiscView extends View {
 
     private final Paint discPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint artPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+    private final Paint previousPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint groovePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint rimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint holeRimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -60,7 +71,6 @@ public class VinylDiscView extends View {
     private final Paint sheenPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path discPath = new Path();
     private final Path labelPath = new Path();
-    private final Matrix shaderMatrix = new Matrix();
     private final RectF discBounds = new RectF();
     private final RectF accentBounds = new RectF();
     private final float[] grooveRadii = new float[GROOVE_COUNT];
@@ -76,6 +86,12 @@ public class VinylDiscView extends View {
 
     private Bitmap art;
     private BitmapShader artShader;
+    private Bitmap previousArt;
+    private BitmapShader previousShader;
+    private long crossfadeStartNanos;
+    private long crossfadeNanos;
+    private long dropStartNanos;
+    private long dropNanos;
     private float cx;
     private float cy;
     private float radius;
@@ -106,6 +122,7 @@ public class VinylDiscView extends View {
         float density = getResources().getDisplayMetrics().density;
         discPaint.setStyle(Paint.Style.FILL);
         artPaint.setStyle(Paint.Style.FILL);
+        previousPaint.setStyle(Paint.Style.FILL);
         groovePaint.setStyle(Paint.Style.STROKE);
         rimPaint.setStyle(Paint.Style.STROKE);
         rimPaint.setStrokeWidth(1.5f * density);
@@ -125,22 +142,43 @@ public class VinylDiscView extends View {
 
     // ------------------------------------------------------------------ public API
 
-    /** Covers the whole disc with the album art; null shows the dark vinyl placeholder. */
+    /** Covers the disc with the album art (crossfading from the previous cover). */
     public void setArt(Bitmap bitmap) {
         Bitmap usable = (bitmap != null && !bitmap.isRecycled()) ? bitmap : null;
         if (usable == art) return;
+        long duration = Motion.scaledNanos(getContext(), CROSSFADE_NANOS);
+        if (duration > 0L && isShown() && radius > 0f) {
+            previousArt = art;
+            previousShader = artShader;
+            previousPaint.setShader(previousShader);
+            crossfadeStartNanos = System.nanoTime();
+            crossfadeNanos = duration;
+        } else {
+            clearPrevious();
+        }
         art = usable;
         artShader = usable == null ? null
                 : new BitmapShader(usable, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
         artPaint.setShader(artShader);
-        updateShaderMatrix();
+        configureShader(artShader, art);
         invalidate();
+        scheduleFrame();
     }
 
     /** Spins up when true, coasts to a stop when false. */
     public void setPlaying(boolean playing) {
         if (this.playing == playing) return;
         this.playing = playing;
+        scheduleFrame();
+    }
+
+    /** "New record" bounce for track changes. */
+    public void playDrop() {
+        long duration = Motion.scaledNanos(getContext(), DROP_NANOS);
+        if (duration <= 0L) return;
+        dropStartNanos = System.nanoTime();
+        dropNanos = duration;
+        invalidate();
         scheduleFrame();
     }
 
@@ -182,7 +220,8 @@ public class VinylDiscView extends View {
                 ? new RadialGradient(cx, cy, radius, COLOR_DISC_CENTER, COLOR_DISC_EDGE, Shader.TileMode.CLAMP)
                 : null);
         layoutGrooves();
-        updateShaderMatrix();
+        configureShader(artShader, art);
+        configureShader(previousShader, previousArt);
     }
 
     /** A filled circle with the spindle hole cut out, so whatever is behind shows through. */
@@ -205,15 +244,16 @@ public class VinylDiscView extends View {
         }
     }
 
-    /** Centre-crops the cover over the full disc. */
-    private void updateShaderMatrix() {
-        if (artShader == null || art == null || radius <= 0f) return;
-        int shortest = Math.min(art.getWidth(), art.getHeight());
+    /** Centre-crops a cover over the full disc. */
+    private void configureShader(BitmapShader shader, Bitmap bitmap) {
+        if (shader == null || bitmap == null || radius <= 0f) return;
+        int shortest = Math.min(bitmap.getWidth(), bitmap.getHeight());
         if (shortest <= 0) return;
         float scale = radius * 2f / shortest;
-        shaderMatrix.setScale(scale, scale);
-        shaderMatrix.postTranslate(cx - art.getWidth() * scale / 2f, cy - art.getHeight() * scale / 2f);
-        artShader.setLocalMatrix(shaderMatrix);
+        Matrix matrix = new Matrix();
+        matrix.setScale(scale, scale);
+        matrix.postTranslate(cx - bitmap.getWidth() * scale / 2f, cy - bitmap.getHeight() * scale / 2f);
+        shader.setLocalMatrix(matrix);
     }
 
     // ------------------------------------------------------------------ drawing
@@ -222,21 +262,50 @@ public class VinylDiscView extends View {
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
         if (radius <= 0f) return;
+        long now = System.nanoTime();
+        float scale = dropScale(now);
+        canvas.save();
+        canvas.scale(scale, scale, cx, cy);
         canvas.save();
         canvas.rotate(angle, cx, cy);
-        if (artShader != null) {
-            canvas.drawPath(discPath, artPaint);
-            drawGrooves(canvas, COLOR_GROOVE_ON_ART, ART_GROOVE_ALPHA_SCALE);
-        } else {
-            canvas.drawPath(discPath, discPaint);
-            drawGrooves(canvas, COLOR_GROOVE, 1f);
-            canvas.drawPath(labelPath, labelEmptyPaint);
-            canvas.drawArc(accentBounds, -60f, 120f, false, accentPaint);
-        }
+        drawSurface(canvas, crossfadeProgress(now));
         canvas.restore();
         drawSheen(canvas);
         canvas.drawCircle(cx, cy, radius, rimPaint);
         canvas.drawCircle(cx, cy, holeRadius, holeRimPaint);
+        canvas.restore();
+    }
+
+    /** Old surface underneath, new surface fading in on top (or old art fading off). */
+    private void drawSurface(Canvas canvas, float progress) {
+        if (artShader != null) {
+            if (progress < 1f) drawPreviousSurface(canvas);
+            artPaint.setAlpha(alphaOf(progress));
+            canvas.drawPath(discPath, artPaint);
+            drawGrooves(canvas, COLOR_GROOVE_ON_ART, ART_GROOVE_ALPHA_SCALE);
+            return;
+        }
+        drawPlaceholder(canvas);
+        if (progress < 1f && previousShader != null) {
+            previousPaint.setAlpha(alphaOf(1f - progress));
+            canvas.drawPath(discPath, previousPaint);
+        }
+    }
+
+    private void drawPreviousSurface(Canvas canvas) {
+        if (previousShader == null) {
+            drawPlaceholder(canvas);
+            return;
+        }
+        previousPaint.setAlpha(OPAQUE);
+        canvas.drawPath(discPath, previousPaint);
+    }
+
+    private void drawPlaceholder(Canvas canvas) {
+        canvas.drawPath(discPath, discPaint);
+        drawGrooves(canvas, COLOR_GROOVE, 1f);
+        canvas.drawPath(labelPath, labelEmptyPaint);
+        canvas.drawArc(accentBounds, -60f, 120f, false, accentPaint);
     }
 
     private void drawGrooves(Canvas canvas, int color, float alphaScale) {
@@ -254,6 +323,39 @@ public class VinylDiscView extends View {
         canvas.drawArc(discBounds, SHEEN_START_A, SHEEN_SWEEP, true, sheenPaint);
         canvas.drawArc(discBounds, SHEEN_START_B, SHEEN_SWEEP, true, sheenPaint);
         canvas.restore();
+    }
+
+    private static int alphaOf(float fraction) {
+        return Math.round(OPAQUE * Math.max(0f, Math.min(1f, fraction)));
+    }
+
+    // ------------------------------------------------------------------ timelines
+
+    private boolean isCrossfading(long now) {
+        return crossfadeNanos > 0L && now - crossfadeStartNanos < crossfadeNanos;
+    }
+
+    private float crossfadeProgress(long now) {
+        if (!isCrossfading(now)) return 1f;
+        float raw = (now - crossfadeStartNanos) / (float) crossfadeNanos;
+        return FADE_INTERPOLATOR.getInterpolation(raw);
+    }
+
+    private boolean isDropping(long now) {
+        return dropNanos > 0L && now - dropStartNanos < dropNanos;
+    }
+
+    private float dropScale(long now) {
+        if (!isDropping(now)) return 1f;
+        float raw = (now - dropStartNanos) / (float) dropNanos;
+        return DROP_START_SCALE + (1f - DROP_START_SCALE) * DROP_INTERPOLATOR.getInterpolation(raw);
+    }
+
+    private void clearPrevious() {
+        previousArt = null;
+        previousShader = null;
+        previousPaint.setShader(null);
+        crossfadeNanos = 0L;
     }
 
     // ------------------------------------------------------------------ animation
@@ -284,9 +386,12 @@ public class VinylDiscView extends View {
         if (visibility == VISIBLE) scheduleFrame();
     }
 
+    private boolean needsFrames(long now) {
+        return playing || velocity > 0f || isCrossfading(now) || isDropping(now);
+    }
+
     private void scheduleFrame() {
-        if (frameScheduled || !isShown()) return;
-        if (!playing && velocity == 0f) return;
+        if (frameScheduled || !isShown() || !needsFrames(System.nanoTime())) return;
         frameScheduled = true;
         lastFrameNanos = 0L;
         ViewCompat.postOnAnimation(this, frameTask);
@@ -298,8 +403,10 @@ public class VinylDiscView extends View {
                 : Math.min(MAX_FRAME_SECONDS, (now - lastFrameNanos) / NANOS_PER_SECOND);
         lastFrameNanos = now;
         advance(dt);
+        if (!isCrossfading(now)) clearPrevious();
+        if (!isDropping(now)) dropNanos = 0L;
         invalidate();
-        if ((playing || velocity > 0f) && isShown()) {
+        if (needsFrames(now) && isShown()) {
             frameScheduled = true;
             ViewCompat.postOnAnimation(this, frameTask);
         }

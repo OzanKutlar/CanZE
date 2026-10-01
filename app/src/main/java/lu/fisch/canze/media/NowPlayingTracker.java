@@ -195,6 +195,28 @@ public final class NowPlayingTracker {
         }
     }
 
+    /** Explicit play: used by the HUD's optimistic toggle so repeated taps never invert. */
+    public void play() {
+        MediaController.TransportControls controls = controls();
+        if (controls == null) return;
+        try {
+            controls.play();
+        } catch (RuntimeException e) {
+            debug("play failed: " + e.getMessage());
+        }
+    }
+
+    /** Explicit pause: counterpart of {@link #play()}. */
+    public void pause() {
+        MediaController.TransportControls controls = controls();
+        if (controls == null) return;
+        try {
+            controls.pause();
+        } catch (RuntimeException e) {
+            debug("pause failed: " + e.getMessage());
+        }
+    }
+
     public void next() {
         MediaController.TransportControls controls = controls();
         if (controls == null) return;

@@ -10,6 +10,8 @@ import android.graphics.RectF;
 import android.graphics.Shader;
 import android.util.AttributeSet;
 import android.view.View;
+import android.view.animation.DecelerateInterpolator;
+import android.view.animation.Interpolator;
 
 import androidx.core.view.ViewCompat;
 
@@ -19,7 +21,8 @@ import lu.fisch.canze.activities.MainActivity;
  * Dark, blurred colour field taken from the album cover, like YouTube Music's player
  * background. The cover is reduced to a 4x4 grid of average colours that is stretched
  * with bilinear filtering: one tiny bitmap per track, nothing extra per frame.
- * Track changes crossfade; one edge fades into the HUD background colour.
+ * Track changes crossfade (eased, honouring the animator scale); one edge fades into the
+ * HUD background colour.
  */
 public class CoverAmbienceView extends View {
 
@@ -32,6 +35,7 @@ public class CoverAmbienceView extends View {
     private static final float EDGE_FRACTION = 0.2f;
     private static final long FADE_NANOS = 600000000L;
     private static final int OPAQUE = 255;
+    private static final Interpolator FADE_INTERPOLATOR = new DecelerateInterpolator();
 
     private final Paint fieldPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
     private final Paint dimPaint = new Paint();
@@ -50,6 +54,7 @@ public class CoverAmbienceView extends View {
     private Bitmap currentField;
     private Bitmap previousField;
     private long fadeStartNanos;
+    private long fadeNanos;
     private boolean frameScheduled;
     private boolean blendTop = true;
 
@@ -79,8 +84,11 @@ public class CoverAmbienceView extends View {
         Bitmap usable = (art != null && !art.isRecycled()) ? art : null;
         if (usable == sourceArt) return;
         sourceArt = usable;
-        previousField = currentField;
-        currentField = usable == null ? null : buildField(usable);
+        Bitmap field = usable == null ? null : buildField(usable);
+        long duration = Motion.scaledNanos(getContext(), FADE_NANOS);
+        previousField = duration > 0L ? currentField : null;
+        currentField = field;
+        fadeNanos = duration;
         fadeStartNanos = System.nanoTime();
         invalidate();
         scheduleFrame();
@@ -134,14 +142,15 @@ public class CoverAmbienceView extends View {
     }
 
     private float fadeProgress(long now) {
-        if (fadeStartNanos == 0L) return 1f;
-        return Math.min(1f, (now - fadeStartNanos) / (float) FADE_NANOS);
+        if (fadeNanos <= 0L) return 1f;
+        float raw = Math.min(1f, (now - fadeStartNanos) / (float) fadeNanos);
+        return FADE_INTERPOLATOR.getInterpolation(raw);
     }
 
     // ------------------------------------------------------------------ crossfade
 
     private void scheduleFrame() {
-        if (frameScheduled || !isShown()) return;
+        if (frameScheduled || !isShown() || fadeProgress(System.nanoTime()) >= 1f) return;
         frameScheduled = true;
         ViewCompat.postOnAnimation(this, frameTask);
     }
