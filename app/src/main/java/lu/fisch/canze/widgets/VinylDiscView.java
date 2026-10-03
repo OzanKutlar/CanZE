@@ -21,8 +21,9 @@ import androidx.core.view.ViewCompat;
 /**
  * A vinyl record whose whole surface is the album cover, with a see-through spindle hole.
  * It spins slowly while music plays, eases in on play and coasts to a stop on pause.
- * New covers crossfade in while spinning, and {@link #playDrop()} gives a small
- * "new record" bounce. The frame loop only runs while something moves and is visible.
+ * New covers crossfade in while spinning. Track changes run as a carousel: the old record
+ * slides out one side while the new one slides in from the other, and the resting record
+ * can be dragged with the finger. The frame loop only runs while something moves and is visible.
  */
 public class VinylDiscView extends View {
 
@@ -33,8 +34,13 @@ public class VinylDiscView extends View {
     private static final float MAX_FRAME_SECONDS = 0.1f;
     private static final float NANOS_PER_SECOND = 1e9f;
     private static final long CROSSFADE_NANOS = 450000000L;
-    private static final long DROP_NANOS = 450000000L;
-    private static final float DROP_START_SCALE = 0.94f;
+    private static final long SLIDE_NANOS = 420000000L;
+    private static final long MIN_SLIDE_NANOS = 120000000L;
+    private static final long SPRING_NANOS = 320000000L;
+    private static final float SLIDE_FADE = 0.7f;
+    private static final int PHASE_SHOWN = 0;
+    private static final int PHASE_HIDDEN = 1;
+    private static final int PHASE_ENTERING = 2;
     private static final int DEFAULT_SIZE_DP = 160;
     private static final int GROOVE_COUNT = 22;
     private static final float HOLE_FRACTION = 0.09f;
@@ -48,7 +54,8 @@ public class VinylDiscView extends View {
     private static final float SHEEN_SWEEP = 35f;
     private static final int OPAQUE = 255;
     private static final Interpolator FADE_INTERPOLATOR = new DecelerateInterpolator();
-    private static final Interpolator DROP_INTERPOLATOR = new OvershootInterpolator(1.5f);
+    private static final Interpolator SLIDE_INTERPOLATOR = new DecelerateInterpolator(1.6f);
+    private static final Interpolator SPRING_INTERPOLATOR = new OvershootInterpolator(1.2f);
 
     private static final int COLOR_DISC_CENTER = 0xFF1C1F26;
     private static final int COLOR_DISC_EDGE = 0xFF07090D;
@@ -63,6 +70,7 @@ public class VinylDiscView extends View {
     private final Paint discPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint artPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint previousPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+    private final Paint outgoingPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint groovePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint rimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint holeRimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -90,8 +98,22 @@ public class VinylDiscView extends View {
     private BitmapShader previousShader;
     private long crossfadeStartNanos;
     private long crossfadeNanos;
-    private long dropStartNanos;
-    private long dropNanos;
+
+    // Carousel: one record leaving, the current one resting, hidden or entering.
+    private Bitmap outgoingArt;
+    private BitmapShader outgoingShader;
+    private float outgoingFrom;
+    private float outgoingTo;
+    private long outgoingStartNanos;
+    private long outgoingNanos;
+    private int phase = PHASE_SHOWN;
+    private float dragOffset;
+    private float springFrom;
+    private long springStartNanos;
+    private long springNanos;
+    private float enterFrom;
+    private long enterStartNanos;
+    private long enterNanos;
     private float cx;
     private float cy;
     private float radius;
@@ -123,6 +145,7 @@ public class VinylDiscView extends View {
         discPaint.setStyle(Paint.Style.FILL);
         artPaint.setStyle(Paint.Style.FILL);
         previousPaint.setStyle(Paint.Style.FILL);
+        outgoingPaint.setStyle(Paint.Style.FILL);
         groovePaint.setStyle(Paint.Style.STROKE);
         rimPaint.setStyle(Paint.Style.STROKE);
         rimPaint.setStrokeWidth(1.5f * density);
@@ -147,7 +170,7 @@ public class VinylDiscView extends View {
         Bitmap usable = (bitmap != null && !bitmap.isRecycled()) ? bitmap : null;
         if (usable == art) return;
         long duration = Motion.scaledNanos(getContext(), CROSSFADE_NANOS);
-        if (duration > 0L && isShown() && radius > 0f) {
+        if (duration > 0L && isShown() && radius > 0f && phase != PHASE_HIDDEN) {
             previousArt = art;
             previousShader = artShader;
             previousPaint.setShader(previousShader);
@@ -172,14 +195,93 @@ public class VinylDiscView extends View {
         scheduleFrame();
     }
 
-    /** "New record" bounce for track changes. */
-    public void playDrop() {
-        long duration = Motion.scaledNanos(getContext(), DROP_NANOS);
-        if (duration <= 0L) return;
-        dropStartNanos = System.nanoTime();
-        dropNanos = duration;
+    // ------------------------------------------------------------------ carousel
+
+    /** Moves the resting record with the finger. Ignored while a slide is running. */
+    public void setDragOffset(float px) {
+        if (phase != PHASE_SHOWN) return;
+        float limit = slideDistance();
+        springNanos = 0L;
+        dragOffset = limit > 0f ? Math.max(-limit, Math.min(limit, px)) : 0f;
+        invalidate();
+    }
+
+    /** Springs a dragged record back to the centre. */
+    public void releaseDrag() {
+        if (phase != PHASE_SHOWN || dragOffset == 0f) return;
+        springFrom = dragOffset;
+        dragOffset = 0f;
+        springStartNanos = System.nanoTime();
+        springNanos = Motion.scaledNanos(getContext(), SPRING_NANOS);
         invalidate();
         scheduleFrame();
+    }
+
+    /**
+     * Slides the record out of the disc area, starting wherever it is now (e.g. mid-drag):
+     * DIRECTION_NEXT leaves to the left, DIRECTION_PREVIOUS to the right.
+     * The area stays empty until {@link #enter(int)}.
+     */
+    public void exit(int direction) {
+        if (phase == PHASE_HIDDEN) return;
+        long now = System.nanoTime();
+        float from = currentOffset(now);
+        float travel = slideDistance();
+        long base = Motion.scaledNanos(getContext(), SLIDE_NANOS);
+        clearPrevious();
+        clearOutgoing();
+        phase = PHASE_HIDDEN;
+        dragOffset = 0f;
+        springNanos = 0L;
+        if (base > 0L && travel > 0f && isShown()) {
+            float to = -directionSign(direction) * travel;
+            float share = Math.min(2f, Math.abs(to - from) / travel);
+            outgoingArt = art;
+            outgoingShader = artShader;
+            outgoingPaint.setShader(outgoingShader);
+            outgoingFrom = from;
+            outgoingTo = to;
+            outgoingStartNanos = now;
+            outgoingNanos = Math.max(MIN_SLIDE_NANOS, (long) (base * share));
+        }
+        invalidate();
+        scheduleFrame();
+    }
+
+    /** Slides the record in: DIRECTION_NEXT from the right, DIRECTION_PREVIOUS from the left. */
+    public void enter(int direction) {
+        float travel = slideDistance();
+        long duration = Motion.scaledNanos(getContext(), SLIDE_NANOS);
+        clearPrevious();
+        dragOffset = 0f;
+        springNanos = 0L;
+        if (duration <= 0L || travel <= 0f || !isShown()) {
+            phase = PHASE_SHOWN;
+            enterNanos = 0L;
+            invalidate();
+            return;
+        }
+        phase = PHASE_ENTERING;
+        enterFrom = directionSign(direction) * travel;
+        enterStartNanos = System.nanoTime();
+        enterNanos = duration;
+        invalidate();
+        scheduleFrame();
+    }
+
+    /** True after {@link #exit(int)} until the next {@link #enter(int)}. */
+    public boolean isAwaitingTrack() {
+        return phase == PHASE_HIDDEN;
+    }
+
+    /** Ends every slide at once and shows the current record resting in the centre. */
+    public void showInPlace() {
+        clearOutgoing();
+        phase = PHASE_SHOWN;
+        dragOffset = 0f;
+        springNanos = 0L;
+        enterNanos = 0L;
+        invalidate();
     }
 
     // ------------------------------------------------------------------ measuring
@@ -222,6 +324,7 @@ public class VinylDiscView extends View {
         layoutGrooves();
         configureShader(artShader, art);
         configureShader(previousShader, previousArt);
+        configureShader(outgoingShader, outgoingArt);
     }
 
     /** A filled circle with the spindle hole cut out, so whatever is behind shows through. */
@@ -263,17 +366,39 @@ public class VinylDiscView extends View {
         super.onDraw(canvas);
         if (radius <= 0f) return;
         long now = System.nanoTime();
-        float scale = dropScale(now);
-        canvas.save();
-        canvas.scale(scale, scale, cx, cy);
+        if (isOutgoingActive(now)) drawDisc(canvas, outgoingOffset(now), true, 1f);
+        if (phase != PHASE_HIDDEN) drawDisc(canvas, currentOffset(now), false, crossfadeProgress(now));
+    }
+
+    /** One record at a horizontal offset; it fades as it moves away from the centre. */
+    private void drawDisc(Canvas canvas, float offset, boolean outgoing, float progress) {
+        int alpha = slideAlpha(offset);
+        int saved = alpha < OPAQUE
+                ? canvas.saveLayerAlpha(0f, 0f, getWidth(), getHeight(), alpha, Canvas.ALL_SAVE_FLAG)
+                : canvas.save();
+        canvas.translate(offset, 0f);
         canvas.save();
         canvas.rotate(angle, cx, cy);
-        drawSurface(canvas, crossfadeProgress(now));
+        if (outgoing) {
+            drawOutgoingSurface(canvas);
+        } else {
+            drawSurface(canvas, progress);
+        }
         canvas.restore();
         drawSheen(canvas);
         canvas.drawCircle(cx, cy, radius, rimPaint);
         canvas.drawCircle(cx, cy, holeRadius, holeRimPaint);
-        canvas.restore();
+        canvas.restoreToCount(saved);
+    }
+
+    private void drawOutgoingSurface(Canvas canvas) {
+        if (outgoingShader == null) {
+            drawPlaceholder(canvas);
+            return;
+        }
+        outgoingPaint.setAlpha(OPAQUE);
+        canvas.drawPath(discPath, outgoingPaint);
+        drawGrooves(canvas, COLOR_GROOVE_ON_ART, ART_GROOVE_ALPHA_SCALE);
     }
 
     /** Old surface underneath, new surface fading in on top (or old art fading off). */
@@ -341,14 +466,66 @@ public class VinylDiscView extends View {
         return FADE_INTERPOLATOR.getInterpolation(raw);
     }
 
-    private boolean isDropping(long now) {
-        return dropNanos > 0L && now - dropStartNanos < dropNanos;
+    /** A record has to travel the full view width to be completely out of sight. */
+    private float slideDistance() {
+        return getWidth();
     }
 
-    private float dropScale(long now) {
-        if (!isDropping(now)) return 1f;
-        float raw = (now - dropStartNanos) / (float) dropNanos;
-        return DROP_START_SCALE + (1f - DROP_START_SCALE) * DROP_INTERPOLATOR.getInterpolation(raw);
+    private float currentOffset(long now) {
+        if (phase == PHASE_ENTERING) {
+            float p = fraction(now, enterStartNanos, enterNanos);
+            return enterFrom * (1f - SLIDE_INTERPOLATOR.getInterpolation(p));
+        }
+        if (isSpringing(now)) {
+            float p = fraction(now, springStartNanos, springNanos);
+            return springFrom * (1f - SPRING_INTERPOLATOR.getInterpolation(p));
+        }
+        return dragOffset;
+    }
+
+    private float outgoingOffset(long now) {
+        float p = fraction(now, outgoingStartNanos, outgoingNanos);
+        return outgoingFrom + (outgoingTo - outgoingFrom) * SLIDE_INTERPOLATOR.getInterpolation(p);
+    }
+
+    private boolean isOutgoingActive(long now) {
+        return outgoingNanos > 0L && now - outgoingStartNanos < outgoingNanos;
+    }
+
+    private boolean isSpringing(long now) {
+        return springNanos > 0L && now - springStartNanos < springNanos;
+    }
+
+    private int slideAlpha(float offset) {
+        float travel = slideDistance();
+        if (travel <= 0f || offset == 0f) return OPAQUE;
+        float away = Math.min(1f, Math.abs(offset) / travel);
+        return Math.round(OPAQUE * (1f - SLIDE_FADE * away));
+    }
+
+    private static float fraction(long now, long start, long duration) {
+        if (duration <= 0L) return 1f;
+        return Math.max(0f, Math.min(1f, (now - start) / (float) duration));
+    }
+
+    private static float directionSign(int direction) {
+        return direction == TrackTransition.DIRECTION_PREVIOUS ? -1f : 1f;
+    }
+
+    private void finishSlidesAt(long now) {
+        if (outgoingNanos > 0L && !isOutgoingActive(now)) clearOutgoing();
+        if (phase == PHASE_ENTERING && fraction(now, enterStartNanos, enterNanos) >= 1f) {
+            phase = PHASE_SHOWN;
+            dragOffset = 0f;
+        }
+        if (springNanos > 0L && !isSpringing(now)) springNanos = 0L;
+    }
+
+    private void clearOutgoing() {
+        outgoingArt = null;
+        outgoingShader = null;
+        outgoingPaint.setShader(null);
+        outgoingNanos = 0L;
     }
 
     private void clearPrevious() {
@@ -387,7 +564,8 @@ public class VinylDiscView extends View {
     }
 
     private boolean needsFrames(long now) {
-        return playing || velocity > 0f || isCrossfading(now) || isDropping(now);
+        return playing || velocity > 0f || isCrossfading(now) || isOutgoingActive(now)
+                || phase == PHASE_ENTERING || isSpringing(now);
     }
 
     private void scheduleFrame() {
@@ -404,7 +582,7 @@ public class VinylDiscView extends View {
         lastFrameNanos = now;
         advance(dt);
         if (!isCrossfading(now)) clearPrevious();
-        if (!isDropping(now)) dropNanos = 0L;
+        finishSlidesAt(now);
         invalidate();
         if (needsFrames(now) && isShown()) {
             frameScheduled = true;

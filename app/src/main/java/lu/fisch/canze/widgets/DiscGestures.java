@@ -15,14 +15,18 @@ import androidx.core.view.ViewCompat;
 
 /**
  * Touch handling for the vinyl. A tap clicks (play/pause through the view's own click
- * listener); a horizontal swipe reports its direction. The disc squeezes while pressed,
- * follows the finger with resistance while swiping, ticks once when the swipe is far
- * enough to count, and springs back on release. A quick flick also counts.
+ * listener); a horizontal drag is reported as an offset, then as a release that either
+ * commits (far enough, or a quick flick) or not. The disc squeezes while pressed and ticks
+ * once when the drag is far enough to count. Moving the record is up to the callback.
  */
 public final class DiscGestures implements View.OnTouchListener {
 
     public interface Callback {
-        void onSwipe(boolean towardsRight);
+        /** Horizontal finger travel since touch-down, in px (positive = right). */
+        void onDrag(float offsetPx);
+
+        /** End of a drag; {@code commit} is true for a long enough drag or a flick. */
+        void onRelease(float offsetPx, boolean commit);
     }
 
     private static final int STATE_IDLE = 0;
@@ -33,16 +37,12 @@ public final class DiscGestures implements View.OnTouchListener {
     private static final float PRESSED_SCALE = 0.95f;
     private static final long PRESS_MS = 90L;
     private static final long RELEASE_MS = 260L;
-    private static final long SNAP_BACK_MS = 320L;
-    private static final float DRAG_RESISTANCE = 0.5f;
-    private static final float MAX_DRAG_FRACTION = 0.35f;
     private static final float COMMIT_FRACTION = 0.22f;
     private static final float MIN_COMMIT_DP = 48f;
     private static final float FLING_DP_PER_SECOND = 700f;
     private static final int VELOCITY_UNITS_MS = 1000;
     private static final Interpolator PRESS_INTERPOLATOR = new DecelerateInterpolator();
     private static final Interpolator RELEASE_INTERPOLATOR = new OvershootInterpolator(2.5f);
-    private static final Interpolator SNAP_INTERPOLATOR = new OvershootInterpolator(1.2f);
 
     private final Callback callback;
     private final float touchSlop;
@@ -83,8 +83,7 @@ public final class DiscGestures implements View.OnTouchListener {
                 onUp(view, event);
                 break;
             case MotionEvent.ACTION_CANCEL:
-                springBack(view);
-                finish();
+                onCancel(view);
                 break;
             default:
                 break;
@@ -115,9 +114,8 @@ public final class DiscGestures implements View.OnTouchListener {
         if (state == STATE_SWIPING) {
             float dx = event.getRawX() - downX;
             boolean commit = Math.abs(dx) >= commitDistance(view) || isFling(dx);
-            springBack(view);
             finish();
-            if (commit) callback.onSwipe(dx > 0f);
+            callback.onRelease(dx, commit);
             return;
         }
         boolean tap = state == STATE_PRESSED && isInside(view, event);
@@ -140,8 +138,7 @@ public final class DiscGestures implements View.OnTouchListener {
     }
 
     private void drag(View view, float dx) {
-        float limit = view.getWidth() * MAX_DRAG_FRACTION;
-        view.setTranslationX(Math.max(-limit, Math.min(limit, dx * DRAG_RESISTANCE)));
+        callback.onDrag(dx);
         boolean reached = Math.abs(dx) >= commitDistance(view);
         if (reached == armed) return;
         armed = reached;
@@ -185,9 +182,11 @@ public final class DiscGestures implements View.OnTouchListener {
                 .setDuration(duration).setInterpolator(interpolator).start();
     }
 
-    private static void springBack(View view) {
-        ViewCompat.animate(view).translationX(0f).scaleX(1f).scaleY(1f)
-                .setDuration(SNAP_BACK_MS).setInterpolator(SNAP_INTERPOLATOR).start();
+    private void onCancel(View view) {
+        boolean wasSwiping = state == STATE_SWIPING;
+        animateScale(view, 1f, RELEASE_MS, RELEASE_INTERPOLATOR);
+        finish();
+        if (wasSwiping) callback.onRelease(0f, false);
     }
 
     private void finish() {

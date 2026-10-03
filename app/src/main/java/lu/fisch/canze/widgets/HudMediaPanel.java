@@ -54,6 +54,7 @@ public final class HudMediaPanel implements NowPlayingListener {
     private static final long SEEK_MATCH_TOLERANCE_MS = 3000L;
     private static final long OPTIMISTIC_WINDOW_MS = 1500L;
     private static final long SKIP_DIRECTION_WINDOW_MS = 3000L;
+    private static final long DISC_RETURN_MS = 2000L;
     private static final long ALPHA_FADE_MS = 200L;
     private static final long MORPH_HALF_MS = 90L;
     private static final long PULSE_MS = 350L;
@@ -149,6 +150,11 @@ public final class HudMediaPanel implements NowPlayingListener {
     private long optimisticUntil;
     private int lastSkipDirection = TrackTransition.DIRECTION_NEXT;
     private long lastSkipAt;
+
+    // Carousel: the track the record on screen belongs to, and a pending skip.
+    private String discKey;
+    private int discExitDirection = TrackTransition.DIRECTION_NEXT;
+    private long discExitAt;
     private boolean shuffleColorInitialised;
     private int shuffleTargetColor = COLOR_IDLE;
     private int shuffleShownColor = COLOR_IDLE;
@@ -230,6 +236,7 @@ public final class HudMediaPanel implements NowPlayingListener {
         long now = SystemClock.elapsedRealtime();
         if (now - lastTickAt < TICK_INTERVAL_MS) return;
         lastTickAt = now;
+        returnDiscIfIgnored(now);
         if (!state.active) {
             updateSlot(false, now);
             return;
@@ -313,8 +320,13 @@ public final class HudMediaPanel implements NowPlayingListener {
         PressFeedback.attach(nextCell, nextIcon);
         DiscGestures.attach(vinyl, new DiscGestures.Callback() {
             @Override
-            public void onSwipe(boolean towardsRight) {
-                onDiscSwiped(towardsRight);
+            public void onDrag(float offsetPx) {
+                vinyl.setDragOffset(offsetPx);
+            }
+
+            @Override
+            public void onRelease(float offsetPx, boolean commit) {
+                onDiscReleased(offsetPx, commit);
             }
         });
         PressFeedback.attach(chip, null, SOFT_PRESS_SCALE);
@@ -373,40 +385,54 @@ public final class HudMediaPanel implements NowPlayingListener {
         }
     }
 
-    private void onSkipTapped(int direction) {
-        if (tracker == null || !state.active) return;
-        lastSkipDirection = direction;
-        lastSkipAt = SystemClock.elapsedRealtime();
-        nudge(direction == TrackTransition.DIRECTION_NEXT ? nextCell : previousCell, direction);
-        if (direction == TrackTransition.DIRECTION_NEXT) {
-            tracker.next();
-        } else {
-            tracker.previous();
-        }
-    }
-
     /**
-     * Swipe right = next song, swipe left = previous song. The text leaves in the swipe's
-     * direction so it follows the finger: a right swipe uses the right-exiting transition.
+     * Buttons and disc swipes. The record leaves at once (left for next, right for
+     * previous); the new one slides in when the player reports the track change.
+     *
+     * @return false when the player cannot skip in that direction
      */
-    private void onDiscSwiped(boolean towardsRight) {
+    private boolean onSkipTapped(int direction) {
         NowPlaying current = state;
-        if (tracker == null || !current.active) return;
-        if (towardsRight ? !current.canNext : !current.canPrevious) return;
-        lastSkipDirection = towardsRight ? TrackTransition.DIRECTION_PREVIOUS : TrackTransition.DIRECTION_NEXT;
-        lastSkipAt = SystemClock.elapsedRealtime();
-        nudge(towardsRight ? nextCell : previousCell, towardsRight ? 1 : -1);
-        if (towardsRight) {
+        if (tracker == null || !current.active) return false;
+        boolean next = direction == TrackTransition.DIRECTION_NEXT;
+        if (next ? !current.canNext : !current.canPrevious) return false;
+        long now = SystemClock.elapsedRealtime();
+        lastSkipDirection = direction;
+        lastSkipAt = now;
+        discExitDirection = direction;
+        discExitAt = now;
+        vinyl.exit(direction);
+        nudge(next ? nextCell : previousCell, direction);
+        if (next) {
             tracker.next();
         } else {
             tracker.previous();
         }
+        return true;
     }
 
-    private int consumeSkipDirection(long now) {
+    /** Drag the record left for the next song, right for the previous one. */
+    private void onDiscReleased(float offsetPx, boolean commit) {
+        if (commit && offsetPx != 0f) {
+            int direction = offsetPx < 0f
+                    ? TrackTransition.DIRECTION_NEXT
+                    : TrackTransition.DIRECTION_PREVIOUS;
+            if (onSkipTapped(direction)) return;
+        }
+        vinyl.releaseDrag();
+    }
+
+    /** Direction of a skip made in the last few seconds; automatic advances count as next. */
+    private int recentSkipDirection(long now) {
         boolean recent = lastSkipAt != 0L && now - lastSkipAt <= SKIP_DIRECTION_WINDOW_MS;
-        lastSkipAt = 0L;
         return recent ? lastSkipDirection : TrackTransition.DIRECTION_NEXT;
+    }
+
+    /** A skip the player ignored (e.g. "previous" restarting the song) brings the record back. */
+    private void returnDiscIfIgnored(long now) {
+        if (discExitAt == 0L || now - discExitAt < DISC_RETURN_MS) return;
+        discExitAt = 0L;
+        if (vinyl.isAwaitingTrack()) vinyl.enter(-discExitDirection);
     }
 
     // ------------------------------------------------------------------ gear slot
@@ -481,6 +507,9 @@ public final class HudMediaPanel implements NowPlayingListener {
     private void resetTrackDisplay() {
         transition.finish();
         hasShownTrack = false;
+        discKey = null;
+        discExitAt = 0L;
+        vinyl.showInPlace();
         displayedSource = null;
         displayedTitle = null;
         displayedArtist = null;
@@ -562,7 +591,7 @@ public final class HudMediaPanel implements NowPlayingListener {
         renderButtons(current);
         renderPlayState(current, now);
         renderProgress(current, now);
-        vinyl.setArt(current.art);
+        renderDisc(current, now);
         ambience.setArt(current.art);
     }
 
@@ -578,9 +607,28 @@ public final class HudMediaPanel implements NowPlayingListener {
             return;
         }
         if (transition.isFadingOut()) return; // the swap will pick up this newest state
-        transition.run(consumeSkipDirection(now), applyLatestTrack);
-        vinyl.playDrop();
+        transition.run(recentSkipDirection(now), applyLatestTrack);
         glideProgress(PlaybackClock.toPermille(current.positionAt(now), current.durationMs));
+    }
+
+    /**
+     * Carousel: on a new track the old record slides out (left for next, right for previous)
+     * and the new one slides in from the other side. After a tap or swipe the old record has
+     * already left, so only the entry remains.
+     */
+    private void renderDisc(NowPlaying current, long now) {
+        String key = current.source + '|' + current.title;
+        if (discKey == null || key.equals(discKey)) {
+            discKey = key;
+            vinyl.setArt(current.art);
+            return;
+        }
+        discKey = key;
+        discExitAt = 0L;
+        int direction = recentSkipDirection(now);
+        if (!vinyl.isAwaitingTrack()) vinyl.exit(direction);
+        vinyl.setArt(current.art);
+        vinyl.enter(direction);
     }
 
     /** Same source and title; an artist that only fills in later counts as the same track. */
@@ -769,6 +817,8 @@ public final class HudMediaPanel implements NowPlayingListener {
         settleTransform(nextIcon);
         settleTransform(playButton);
         settleTransform(vinyl);
+        vinyl.showInPlace();
+        discExitAt = 0L;
         settleTransform(chip);
         optimisticUntil = 0L;
         setSeekHighlight(false);
